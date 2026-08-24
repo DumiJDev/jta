@@ -1,0 +1,4 @@
+# Ver dev.jta.demo.vets.AppRole - toda role usada em @RequiresRole no
+# demo e validada em compile-time contra as constantes deste enum.
+[security]
+roles_enum = "dev.jta.demo.vets.AppRole"

@@ -1,0 +1,48 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <parent>
+        <groupId>dev.jta</groupId>
+        <artifactId>jta-parent</artifactId>
+        <version>0.1.0-SNAPSHOT</version>
+    </parent>
+
+    <artifactId>jta-runtime</artifactId>
+    <packaging>jar</packaging>
+    <name>jta-runtime</name>
+    <description>
+        Nucleo de runtime agnostico de framework web: resolve/instancia
+        componentes, aplica os dois allowlists de seguranca (acoes,
+        bindableFields), autoriza contra @RequiresRole, e renderiza via JTE -
+        tudo sem depender de Spring MVC/Spring Security. Adaptadores por
+        framework (ex: jta-spring-boot-starter) sao camadas finas de
+        traducao entre HTTP e os tipos deste modulo, para que a logica de
+        seguranca nunca precise ser reimplementada por adaptador.
+    </description>
+
+    <dependencies>
+        <dependency>
+            <groupId>dev.jta</groupId>
+            <artifactId>jta-core</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>gg.jte</groupId>
+            <artifactId>jte</artifactId>
+        </dependency>
+        <dependency>
+            <!-- opcional em runtime (ver ComponentInvoker#validate) - um host
+                 sem Bean Validation no classpath simplesmente nunca aciona a
+                 validacao, mas a API precisa estar presente em compile-time. -->
+            <groupId>jakarta.validation</groupId>
+            <artifactId>jakarta.validation-api</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.slf4j</groupId>
+            <artifactId>slf4j-api</artifactId>
+        </dependency>
+    </dependencies>
+</project>

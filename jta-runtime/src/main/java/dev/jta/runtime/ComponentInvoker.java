@@ -1,8 +1,7 @@
-package dev.jta.spring;
+package dev.jta.runtime;
 
 import jakarta.validation.ConstraintViolation;
 import jakarta.validation.Validator;
-import org.springframework.context.ApplicationContext;
 
 import java.lang.reflect.Field;
 import java.lang.reflect.InvocationTargetException;
@@ -13,11 +12,18 @@ import java.util.Map;
 import java.util.Set;
 
 /**
- * Instancia um componente, popula seus campos publicos a partir dos
+ * Instancia um componente (via {@link ComponentFactory}, injetado -
+ * agnostico de framework/DI), popula seus campos publicos a partir dos
  * parametros de uma requisicao (o mecanismo de "estado gerenciado pelo
  * backend": o estado atual e enviado de volta como query params/path
  * variables a cada acao HTMX ou GET de pagina, e reidratado aqui) e
  * invoca acoes/renderiza via reflection.
+ *
+ * <p>Extraido de {@code JtaComponentInvoker} (jta-spring-boot-starter) na
+ * extracao do nucleo agnostico - a unica mudanca de comportamento e
+ * {@link #instantiate}, que agora delega para {@link ComponentFactory} em
+ * vez de conter a logica do {@code ApplicationContext} do Spring
+ * diretamente. Todo o resto (populate/invoke/validate) e identico.
  *
  * <p><b>Limitacao conhecida do MVP:</b> conversao de parametros suporta
  * apenas {@code String}, {@code int}/{@code Integer}, {@code long}/
@@ -25,55 +31,17 @@ import java.util.Set;
  * {@code Boolean}. Tipos compostos (listas, objetos aninhados) precisam
  * ser carregados pelo proprio componente via um servico injetado, nao
  * por bind automatico de query param.
- *
- * <p>Registrado como bean explicitamente por {@link JtaAutoConfiguration}
- * (nao via {@code @Component}), ja que este pacote fica fora do
- * component-scan padrao do app consumidor.
  */
-class JtaComponentInvoker {
+public final class ComponentInvoker {
 
-    private final ApplicationContext applicationContext;
+    private final ComponentFactory factory;
 
-    JtaComponentInvoker(ApplicationContext applicationContext) {
-        this.applicationContext = applicationContext;
+    public ComponentInvoker(ComponentFactory factory) {
+        this.factory = factory;
     }
 
-    /**
-     * Instancia o componente. Se o dev registrou a classe como bean Spring
-     * (para receber DI de servicos via construtor), reusa a infra do
-     * Spring; senao cai para um construtor sem argumentos simples.
-     *
-     * <p><b>Trava de correcao importante:</b> um componente JTA carrega
-     * estado por requisicao (campos publicos populados a cada chamada).
-     * Se o dev registrar a classe como {@code @Component} sem
-     * {@code @Scope("prototype")}, o Spring devolve a MESMA instancia
-     * singleton em toda requisicao - o estado de uma requisicao vazaria
-     * para a proxima (bug de concorrencia silencioso e serio, o pior tipo
-     * de bug para deixar passar batido). Por isso falhamos alto e cedo em
-     * vez de deixar o dev descobrir isso sob carga em producao.
-     */
-    Object instantiate(Class<?> type) {
-        String[] beanNames = applicationContext.getBeanNamesForType(type);
-        if (beanNames.length > 0) {
-            String beanName = beanNames[0];
-            if (applicationContext.isSingleton(beanName)) {
-                throw new IllegalStateException(
-                        "Componente " + type.getName() + " esta registrado como bean Spring com escopo singleton "
-                                + "(o padrao). Componentes JTA carregam estado por requisicao, entao PRECISAM ser "
-                                + "@Scope(\"prototype\") quando registrados como bean Spring - caso contrario o "
-                                + "estado de uma requisicao vaza para as seguintes sob concorrencia. Adicione "
-                                + "@Scope(\"prototype\") a classe " + type.getSimpleName() + ".");
-            }
-            return applicationContext.getBean(type);
-        }
-
-        try {
-            return type.getDeclaredConstructor().newInstance();
-        } catch (ReflectiveOperationException e) {
-            throw new IllegalStateException("Nao foi possivel instanciar o componente " + type.getName()
-                    + ". Componentes com construtor que recebe argumentos (para DI) precisam ser registrados "
-                    + "como @Component (com @Scope(\"prototype\")) para o Spring saber como construi-los.", e);
-        }
+    public Object instantiate(Class<?> type) {
+        return factory.instantiate(type);
     }
 
     /**
@@ -85,7 +53,7 @@ class JtaComponentInvoker {
      * {@code ComponentMetadata.bindableFields()}, computado pelo
      * processor em compile-time a partir do que o template realmente usa.
      */
-    void populateFromParams(Object instance, Map<String, String[]> params, java.util.Set<String> bindableFields) {
+    public void populateFromParams(Object instance, Map<String, String[]> params, Set<String> bindableFields) {
         for (Field field : instance.getClass().getFields()) {
             if (Modifier.isStatic(field.getModifiers())) {
                 continue;
@@ -102,14 +70,14 @@ class JtaComponentInvoker {
     }
 
     /**
-     * Popula campos a partir de path variables extraidas pelo Spring
-     * (ver {@code HandlerMapping.URI_TEMPLATE_VARIABLES_ATTRIBUTE} em
-     * {@link JtaRouteRegistrar}). Compartilha a mesma conversao de tipo,
+     * Popula campos a partir de path variables extraidas pelo framework
+     * web (ver o adaptador correspondente, ex: {@code JtaRouteRegistrar}
+     * em jta-spring-boot-starter). Compartilha a mesma conversao de tipo,
      * o mesmo mecanismo de "campo publico = estado", e a mesma restricao
      * a {@code bindableFields} usada para query params - a diferenca e so
      * de onde o valor vem na requisicao.
      */
-    void populateFromPathVariables(Object instance, Map<String, String> pathVariables, java.util.Set<String> bindableFields) {
+    public void populateFromPathVariables(Object instance, Map<String, String> pathVariables, Set<String> bindableFields) {
         if (pathVariables == null || pathVariables.isEmpty()) {
             return;
         }
@@ -153,20 +121,20 @@ class JtaComponentInvoker {
     /**
      * Invoca a acao. Se o metodo lancar {@link dev.jta.core.Redirect}, a
      * excecao e desembrulhada de {@link InvocationTargetException} e
-     * relancada como ela mesma - o chamador ({@code JtaActionController})
-     * a captura para responder com {@code HX-Redirect} em vez de
+     * relancada como ela mesma - o chamador ({@link JtaActionDispatcher})
+     * a captura para devolver um {@code ActionResult.Redirect} em vez de
      * renderizar o fragmento normalmente.
      *
      * <p><b>Defesa em profundidade:</b> so resolve metodos {@code void}
      * (a mesma definicao de "acao" usada pelo processor em compile-time) -
-     * a checagem primaria e {@code JtaActionController} validar
-     * {@code actionName} contra {@code ComponentMetadata.actions()} antes
-     * de sequer chamar isto, mas esta classe nao deveria confiar apenas
-     * no chamador se lembrar de checar (ver SECURITY.md, achado #1 -
-     * invocacao de metodo arbitrario era possivel exatamente porque nada
-     * restringia a resolucao por reflection ao conjunto de acoes reais).
+     * a checagem primaria e o chamador validar {@code actionName} contra
+     * {@code ComponentMetadata.actions()} antes de sequer chamar isto, mas
+     * esta classe nao deveria confiar apenas no chamador se lembrar de
+     * checar (ver SECURITY.md, achado #1 - invocacao de metodo arbitrario
+     * era possivel exatamente porque nada restringia a resolucao por
+     * reflection ao conjunto de acoes reais).
      */
-    void invokeAction(Object instance, String actionName) {
+    public void invokeAction(Object instance, String actionName) {
         Method method = findPublicVoidNoArgMethod(instance.getClass(), actionName)
                 .orElseThrow(() -> new IllegalArgumentException(
                         "Acao '" + actionName + "' nao encontrada em " + instance.getClass().getName()));
@@ -195,7 +163,7 @@ class JtaComponentInvoker {
      * no GET de pagina quanto antes de uma acao - deve ser idempotente
      * (seguro de chamar mais de uma vez).
      */
-    void callInitIfPresent(Object instance) {
+    public void callInitIfPresent(Object instance) {
         findPublicVoidNoArgMethod(instance.getClass(), "init")
                 .ifPresent(m -> {
                     try {
@@ -212,9 +180,9 @@ class JtaComponentInvoker {
      * em compile-time para popular {@code ComponentMetadata.actions()}.
      * Restringir a resolucao a este formato aqui (em vez de aceitar
      * qualquer metodo publico de qualquer retorno) e a segunda camada de
-     * defesa contra invocacao de metodo arbitrario - a primeira e
-     * {@code JtaActionController} nunca chamar {@link #invokeAction} com
-     * um nome que nao esteja em {@code metadata.actions()}.
+     * defesa contra invocacao de metodo arbitrario - a primeira e o
+     * chamador nunca invocar {@link #invokeAction} com um nome que nao
+     * esteja em {@code metadata.actions()}.
      */
     private java.util.Optional<Method> findPublicVoidNoArgMethod(Class<?> type, String name) {
         for (Method method : type.getMethods()) {
@@ -232,10 +200,9 @@ class JtaComponentInvoker {
      * usar o padrao Jakarta em vez de anotacoes proprias.
      *
      * <p>Retorna um mapa vazio se nao houver violacoes (ou se nenhum
-     * {@link Validator} estiver disponivel - ver
-     * {@link JtaActionController}, que so chama isto quando o bean existe,
-     * tornando a validacao totalmente opcional: um projeto sem
-     * {@code spring-boot-starter-validation} no classpath simplesmente
+     * {@link Validator} estiver disponivel - o chamador so passa um
+     * quando o bean/instancia existe, tornando a validacao totalmente
+     * opcional: um projeto sem Bean Validation no classpath simplesmente
      * nunca aciona nada aqui).
      *
      * <p><b>Limitacao conhecida do MVP:</b> so valida os campos do proprio
@@ -243,7 +210,7 @@ class JtaComponentInvoker {
      * e a chave do mapa de erros e o nome simples do campo (sem suporte a
      * caminhos aninhados tipo {@code endereco.cep}).
      */
-    Map<String, String> validate(Object instance, Validator validator) {
+    public Map<String, String> validate(Object instance, Validator validator) {
         Set<ConstraintViolation<Object>> violations = validator.validate(instance);
         if (violations.isEmpty()) {
             return Map.of();
@@ -263,7 +230,7 @@ class JtaComponentInvoker {
      * silencioso - o gate de validacao (a acao nao roda com erros)
      * funciona independente de o dev querer exibir as mensagens ou nao.
      */
-    void applyErrors(Object instance, Map<String, String> errors) {
+    public void applyErrors(Object instance, Map<String, String> errors) {
         for (Field field : instance.getClass().getFields()) {
             if (field.getName().equals("errors") && Map.class.isAssignableFrom(field.getType())) {
                 try {

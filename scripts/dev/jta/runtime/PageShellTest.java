@@ -1,4 +1,4 @@
-package dev.jta.spring;
+package dev.jta.runtime;
 
 import dev.jta.core.ComponentRegistry;
 import dev.jta.core.JtaConfig;

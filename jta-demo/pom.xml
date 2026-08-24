@@ -16,8 +16,10 @@
     <description>
         Aplicacao de demonstracao: prova de ponta a ponta que
         JtaAnnotationProcessor -> .jte gerado -> jte-maven-plugin -> Spring Boot
-        -> HTMX funciona. Um unico componente (Contador), identico ao exemplo
-        do documento de arquitetura original.
+        -> HTMX funciona, num dominio unico e coeso (clinica veterinaria,
+        no espirito do Spring PetClinic) - persistencia real com relacoes
+        JPA, CRUD completo, criacao aninhada, validacao, layout, e
+        autenticacao real dogfoodando @RequiresRole.
     </description>
 
     <dependencies>
@@ -48,6 +50,11 @@
         <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-data-jpa</artifactId>
+        </dependency>
+        <dependency>
+            <!-- dogfooda @RequiresRole/@AllowAnonymous de verdade - ver SecurityConfig -->
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-security</artifactId>
         </dependency>
         <dependency>
             <groupId>com.h2database</groupId>

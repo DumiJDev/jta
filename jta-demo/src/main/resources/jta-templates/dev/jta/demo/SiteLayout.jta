@@ -2,9 +2,11 @@
 <nav class="jta-nav">
 <a class="jta-brand" href="/">JTA Demo</a>
 <a href="/contador">Contador</a>
-<a href="/produtos">Produtos</a>
+<a href="/tutores">Tutores</a>
+<a href="/veterinarios">Veterinarios</a>
 <a href="/tarefas">Tarefas</a>
 <a href="/contato">Contato</a>
+<a href="/login">Entrar</a>
 </nav>
 <router-outlet/>
 </div>

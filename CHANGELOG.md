@@ -4,7 +4,41 @@ Histórico de decisões e mudanças, em ordem cronológica inversa. O
 `README.md` foca no estado atual do projeto; este arquivo guarda o
 raciocínio por trás de como ele chegou lá.
 
-## 2026-08-24 — Revisão de segurança (OWASP Top 10) e upgrades de dependências
+## 2026-08-24 (b) — Núcleo agnóstico de framework (`jta-runtime`) e demo reformado
+
+- **Novo módulo `jta-runtime`**: extraído de `jta-spring-boot-starter` para
+  isolar tudo que não depende de Spring MVC/Spring Security -
+  `ComponentInvoker` (reflection, allowlists dos achados #1/#5),
+  `SecurityEnforcer` (`@RequiresRole`, agora contra a interface neutra
+  `CurrentUser`), `JtaActionDispatcher`/`JtaPageDispatcher` (orquestração
+  de ação/página, devolvendo `ActionResult`/`PageResult` selados), e
+  `PageShellRenderer` (já era agnóstico, só mudou de módulo). Objetivo:
+  um futuro adaptador Quarkus/Javalin/standalone vira uma camada fina de
+  tradução HTTP em cima deste núcleo, em vez de reimplementar (e arriscar
+  re-quebrar) a lógica de segurança. `jta-spring-boot-starter` virou
+  adaptador fino (`SpringComponentFactory`, `SpringCurrentUser` +
+  `JtaActionController`/`JtaRouteRegistrar` reduzidos a tradução
+  HTTP ↔ dispatcher). Extração validada como **comportment-preserving**:
+  os 20 testes existentes passaram sem editar nenhum teste.
+- **Demo reformado para um domínio único** (clínica veterinária: Tutores →
+  Pets → Visitas, + Veterinários), no espírito do Spring PetClinic — o
+  catálogo de produtos (e-commerce) foi removido. Cobre os mesmos
+  conceitos que o catálogo antigo (DI, JPA, CRUD, path params, validação),
+  mais dois padrões novos: criação aninhada (`/tutores/{tutorId}/pets/novo`,
+  path param usado como FK) e criação de registro filho direto da página
+  de detalhe do pai (registrar visita em `/pets/{id}`).
+- **Primeiro dogfood real de `@RequiresRole`**: `jta-demo` ganhou
+  `spring-boot-starter-security` + `SecurityConfig` (login em memória,
+  `admin`/`admin` e `user`/`user`, CSRF isento em `/__jta/action/**` -
+  ver SECURITY.md achado #6) e protegeu cadastro/edição de veterinário
+  com `@RequiresRole("ADMIN")`. Antes desta mudança, `JtaSecurityEnforcer`
+  nunca tinha sido exercitado contra um app rodando de verdade - só em
+  compile-time por `scripts/smoke-test.sh`. Novo `VeterinarioSecurityTest`
+  prova as três respostas (sem login, role errada, role certa).
+- CSS de base (`PageShellRenderer.BASE_CSS`) ganhou estilo de tabela real
+  e variantes de botão secundário/perigo, usados pelas novas listagens.
+
+## 2026-08-24 (a) — Revisão de segurança (OWASP Top 10) e upgrades de dependências
 
 - **Revisão completa mapeada ao OWASP Top 10 (2021)** — ver
   [`SECURITY.md`](./SECURITY.md) para o detalhe de cada achado.

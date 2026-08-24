@@ -2,6 +2,8 @@ package dev.jta.spring;
 
 import dev.jta.core.ComponentMetadata;
 import dev.jta.core.ComponentRegistry;
+import dev.jta.runtime.ComponentInvoker;
+import dev.jta.runtime.SecurityEnforcer;
 import gg.jte.TemplateEngine;
 import gg.jte.output.StringOutput;
 import jakarta.servlet.http.HttpServletRequest;
@@ -41,7 +43,7 @@ import java.util.concurrent.TimeUnit;
 class JtaSseController implements InitializingBean, DisposableBean {
 
     private final ComponentRegistry registry;
-    private final JtaComponentInvoker invoker;
+    private final ComponentInvoker invoker;
     private final TemplateEngine templateEngine;
     private final RequestMappingHandlerMapping handlerMapping;
 
@@ -49,7 +51,7 @@ class JtaSseController implements InitializingBean, DisposableBean {
     private final Map<String, ComponentMetadata> metadataByPath = new ConcurrentHashMap<>();
     private ScheduledExecutorService scheduler;
 
-    JtaSseController(ComponentRegistry registry, JtaComponentInvoker invoker, TemplateEngine templateEngine,
+    JtaSseController(ComponentRegistry registry, ComponentInvoker invoker, TemplateEngine templateEngine,
                       RequestMappingHandlerMapping handlerMapping) {
         this.registry = registry;
         this.invoker = invoker;
@@ -94,7 +96,7 @@ class JtaSseController implements InitializingBean, DisposableBean {
     SseEmitter connect(HttpServletRequest request) {
         String path = (String) request.getAttribute(HandlerMapping.BEST_MATCHING_PATTERN_ATTRIBUTE);
         ComponentMetadata metadata = metadataByPath.get(path);
-        if (metadata == null || !JtaSecurityEnforcer.isAuthorized(metadata)) {
+        if (metadata == null || !SecurityEnforcer.isAuthorized(metadata, SpringCurrentUser.current())) {
             throw new org.springframework.web.server.ResponseStatusException(
                     org.springframework.http.HttpStatus.FORBIDDEN);
         }

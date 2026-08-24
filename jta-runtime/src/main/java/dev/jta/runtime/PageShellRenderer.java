@@ -1,4 +1,4 @@
-package dev.jta.spring;
+package dev.jta.runtime;
 
 import dev.jta.core.ComponentMetadata;
 import dev.jta.core.ComponentRegistry;
@@ -48,6 +48,10 @@ import dev.jta.core.JtaConfig;
  * a flag ligada, {@link #BASE_CSS} nao e injetado. O CSS escopado por
  * componente ({@code style()}/{@code styleUrl()}) continua sendo injetado
  * de qualquer forma nos dois casos - continua util para overrides pontuais.
+ *
+ * <p>Movido de {@code jta-spring-boot-starter} (pacote {@code dev.jta.spring})
+ * para {@code jta-runtime} na extracao do nucleo agnostico - esta classe
+ * ja nao dependia de nada especifico do Spring, so mudou de endereco.
  */
 final class PageShellRenderer {
 
@@ -147,6 +151,32 @@ final class PageShellRenderer {
             }
             .jta-field { margin-bottom: 0.5rem; }
             .jta-field label { display: block; font-size: 0.875rem; color: var(--jta-muted); margin-bottom: 0.25rem; }
+            .jta-container h2 { font-size: 1.1rem; margin: 1.5rem 0 0.75rem; }
+            .jta-table {
+              width: 100%;
+              border-collapse: collapse;
+              margin-bottom: 1rem;
+              background: white;
+              border: 1px solid var(--jta-border);
+              border-radius: 8px;
+              overflow: hidden;
+            }
+            .jta-table th, .jta-table td { text-align: left; padding: 0.6rem 0.9rem; border-bottom: 1px solid var(--jta-border); }
+            .jta-table th { font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.03em; color: var(--jta-muted); background: var(--jta-bg); }
+            .jta-table tr:last-child td { border-bottom: none; }
+            .jta-table tbody tr:hover td { background: #f3f4f6; }
+            .jta-btn-secondary {
+              background: white;
+              color: var(--jta-text);
+              border: 1px solid var(--jta-border);
+            }
+            .jta-btn-secondary:hover { background: var(--jta-bg); }
+            .jta-btn-danger {
+              background: white;
+              color: var(--jta-error);
+              border: 1px solid var(--jta-error);
+            }
+            .jta-btn-danger:hover { background: var(--jta-error); color: white; }
             """;
 
     private PageShellRenderer() {

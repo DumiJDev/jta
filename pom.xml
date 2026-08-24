@@ -18,6 +18,7 @@
     <modules>
         <module>jta-core</module>
         <module>jta-processor</module>
+        <module>jta-runtime</module>
         <module>jta-spring-boot-starter</module>
         <module>jta-cli</module>
         <module>jta-demo</module>

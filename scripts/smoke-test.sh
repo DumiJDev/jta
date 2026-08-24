@@ -371,12 +371,12 @@ echo "OK, build falhou como esperado:"
 cat "$BUILD/layout-erro3-output.txt"
 
 echo
-echo "==> Testando PageShellRenderer + feature flag do TailwindCSS (jta-spring-boot-starter, so depende de jta-core)"
+echo "==> Testando PageShellRenderer + feature flag do TailwindCSS (jta-runtime, so depende de jta-core)"
 mkdir -p "$BUILD/pageshell/classes"
 javac -cp "$BUILD/core-classes" -d "$BUILD/pageshell/classes" \
-      "$ROOT/jta-spring-boot-starter/src/main/java/dev/jta/spring/PageShellRenderer.java" \
-      "$ROOT/scripts/dev/jta/spring/PageShellTest.java"
-java -cp "$BUILD/pageshell/classes:$BUILD/core-classes" dev.jta.spring.PageShellTest \
+      "$ROOT/jta-runtime/src/main/java/dev/jta/runtime/PageShellRenderer.java" \
+      "$ROOT/scripts/dev/jta/runtime/PageShellTest.java"
+java -cp "$BUILD/pageshell/classes:$BUILD/core-classes" dev.jta.runtime.PageShellTest \
       "$ROOT/scripts/pageshell-fixtures/cp-empty" "$ROOT/scripts/pageshell-fixtures/cp-styled"
 
 echo

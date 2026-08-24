@@ -76,24 +76,37 @@ mvn spring-boot:run
 |---|---|---|
 | `jta-core` | Anotações, `SelectorDerivation`, `ComponentRegistry`, `JtaConfig` | nenhuma |
 | `jta-processor` | `JtaAnnotationProcessor` + `TemplateTransformer` + `CssScoper` | só `jta-core` |
+| `jta-runtime` | Núcleo de runtime **agnóstico de framework web**: `ComponentInvoker`, `SecurityEnforcer`, `JtaActionDispatcher`/`JtaPageDispatcher`, `PageShellRenderer` | `jta-core`, JTE |
 | `jta-cli` | `jta init`, `jta new component` | nenhuma |
-| `jta-spring-boot-starter` | Rotas, endpoint de ação, SSE, segurança, layout | Spring Boot, JTE, Spring Security |
-| `jta-demo` | App de exemplo (catálogo com CRUD real, validação, layout, i18n) | tudo acima |
+| `jta-spring-boot-starter` | Adaptador fino do Spring MVC/Spring Security sobre `jta-runtime`: registro de rotas, controllers, SSE | `jta-runtime`, Spring Boot |
+| `jta-demo` | App de exemplo — clínica veterinária (Tutores/Pets/Visitas/Veterinários), no espírito do Spring PetClinic | tudo acima |
 
 Pipeline: `@AComponent` → `JtaAnnotationProcessor` (compile-time) →
-`.jte` gerado → `jte-maven-plugin` (precompilado) → Spring Boot →
-navegador (HTMX).
+`.jte` gerado → `jte-maven-plugin` (precompilado) → `jta-runtime`
+(dispatch agnóstico de framework) → adaptador Spring MVC → navegador
+(HTMX).
+
+`jta-runtime` existe para que outros hosts (Quarkus, Javalin, standalone —
+ver [`CHANGELOG.md`](./CHANGELOG.md)) precisem só de um adaptador fino
+em cima dele, sem reimplementar os allowlists de segurança
+(`ComponentMetadata.actions()`, `bindableFields()`) nem a checagem de
+`@RequiresRole`.
 
 ## Demo incluído
+
+Domínio único (clínica veterinária), no espírito do Spring PetClinic:
 
 | Rota | Demonstra |
 |---|---|
 | `/` | Nav compartilhada via `@Layout`/`<router-outlet/>` |
 | `/contador` | Estado simples, sem DI, CSS via `styleUrl()` externo |
-| `/produtos` | Catálogo via `@for`, persistência real (JPA + H2) |
-| `/produtos/{id}` | Path param + DI + fallback quando o id não existe |
-| `/produtos/novo` | DI + Jakarta Validation + `Redirect` pós-ação |
-| `/produtos/{id}/editar` | `init()` pré-carregando do banco |
+| `/tutores` | Listagem via `@for`, persistência real (JPA + H2) |
+| `/tutores/{id}` | Path param + DI + relação um-para-muitos (pets do tutor) |
+| `/tutores/novo`, `/tutores/{id}/editar` | DI + Jakarta Validation + `Redirect` + `init()` |
+| `/tutores/{tutorId}/pets/novo` | Criação **aninhada** — path param usado como FK |
+| `/pets/{id}` | Ação que cria um registro filho (visita) direto da página de detalhe do pai |
+| `/veterinarios` | Listagem aberta |
+| `/veterinarios/novo`, `/veterinarios/{id}/editar` | Protegidas por `@RequiresRole("ADMIN")` — entre como `admin`/`admin` (ou `user`/`user` para ver o `403`) |
 | `/tarefas` | `@if`/`@for` (JTE puro) + toggle de campo `boolean` |
 | `/contato` | Jakarta Validation bloqueando a ação em dados inválidos |
 
@@ -129,6 +142,10 @@ CI (`.github/workflows/build.yml`) roda `mvn verify` a cada push/PR.
   `4.0.0-beta6` conscientemente (ver [`SECURITY.md`](./SECURITY.md) e
   [`CHANGELOG.md`](./CHANGELOG.md)); sobrescreva `[htmx] cdn_url` em
   `jta.config.toml` se preferir a série 2.x.
+- Só existe adaptador para Spring Boot ainda. `jta-runtime` já extraiu o
+  núcleo agnóstico (ver "Arquitetura" acima) especificamente para reduzir
+  esse gap — Quarkus/Javalin/standalone/plugin Gradle ficam mais baratos
+  de construir agora, mas ainda não existem.
 
 Histórico completo de decisões, features e bugs corrigidos:
 [`CHANGELOG.md`](./CHANGELOG.md) · [`TROUBLESHOOTING.md`](./TROUBLESHOOTING.md).

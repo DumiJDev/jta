@@ -89,29 +89,32 @@ class SecurityRegressionTest {
 
     // OWASP A03:2021 (Injection/XSS): confirma que o escaping automatico do
     // JTE (ContentType.Html) realmente se aplica tanto em contexto de texto
-    // ({{ nome() }} dentro de <h1>, em ProdutoDetalhe) quanto em contexto de
-    // atributo (value="{{ nome }}", em ProdutoEditar) - nao era um fato
+    // ({{ nome() }} dentro de <h1>, em TutorDetalhe) quanto em contexto de
+    // atributo (value="{{ nome }}", em TutorEditar) - nao era um fato
     // documentado em SECURITY.md nem verificado por nenhum teste ate agora,
-    // so assumido como comportamento padrao do JTE.
+    // so assumido como comportamento padrao do JTE. Usa Tutor (nao Produto -
+    // o demo foi reformado para o dominio de clinica veterinaria) so pela
+    // mesma forma de template (interpolacao de texto + atributo), sem
+    // relacao com o achado em si.
     @Test
-    void nomeDeProdutoComPayloadDeXssEEscapadoTantoEmTextoQuantoEmAtributo() {
+    void nomeDeTutorComPayloadDeXssEEscapadoTantoEmTextoQuantoEmAtributo() {
         String payload = "<script>alert(1)</script>\"><svg onload=alert(2)>";
 
         MultiValueMap<String, String> criarForm = new LinkedMultiValueMap<>();
         criarForm.add("nome", payload);
-        criarForm.add("preco", "9.99");
-        ResponseEntity<String> criado = postAction("dev.jta.demo.produtos.ProdutoNovo", "criar", criarForm);
+        criarForm.add("telefone", "0000-0000");
+        ResponseEntity<String> criado = postAction("dev.jta.demo.tutores.TutorNovo", "criar", criarForm);
         String detalhePath = criado.getHeaders().getFirst("HX-Redirect");
         assertThat(detalhePath).isNotNull();
 
-        // contexto de texto: {{ nome() }} dentro de <h1> em ProdutoDetalhe
+        // contexto de texto: {{ nome() }} dentro de <h1> em TutorDetalhe
         ResponseEntity<String> detalhe = rest.getForEntity(baseUrl() + detalhePath, String.class);
         assertThat(detalhe.getBody()).doesNotContain("<script>alert(1)</script>");
         assertThat(detalhe.getBody()).contains("&lt;script&gt;");
 
-        // contexto de atributo: value="{{ nome }}" em ProdutoEditar, carregado do banco via init()
+        // contexto de atributo: value="{{ nome }}" em TutorEditar, carregado do banco via init()
         String id = detalhePath.substring(detalhePath.lastIndexOf('/') + 1);
-        ResponseEntity<String> editar = rest.getForEntity(baseUrl() + "/produtos/" + id + "/editar", String.class);
+        ResponseEntity<String> editar = rest.getForEntity(baseUrl() + "/tutores/" + id + "/editar", String.class);
         assertThat(editar.getBody()).doesNotContain("\"><svg onload=alert(2)>");
     }
 }
