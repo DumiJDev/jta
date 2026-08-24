@@ -14,45 +14,35 @@ import org.springframework.security.web.SecurityFilterChain;
 
 /**
  * Configuracao minima de autenticacao para dogfoodar
- * {@code @RequiresRole}/{@code @AllowAnonymous} de verdade no demo -
- * antes desta mudanca, {@code jta-demo} nem tinha Spring Security como
- * dependencia, entao a aplicacao em runtime de {@code JtaSecurityEnforcer}
- * nunca tinha sido exercitada num app rodando de verdade (so em
- * compile-time por {@code scripts/smoke-test.sh}).
+ * {@code @RequiresRole}/{@code @AllowAnonymous} de verdade no demo, com
+ * duas roles distintas (ADMIN e PROFESSOR - nao so "logado ou nao").
  *
  * <p><b>Autorizacao de URL vs autorizacao do JTA:</b>
  * {@code authorizeHttpRequests(auth -> auth.anyRequest().permitAll())}
  * deliberadamente nao bloqueia nada por URL - a autorizacao de pagina e
  * feita pelo proprio JTA via {@code @RequiresRole}
- * ({@code JtaSecurityEnforcer}/{@code SecurityEnforcer}), nao pelas regras
- * do Spring Security. O papel do Spring Security aqui e so fornecer o
- * mecanismo de autenticacao (login) para {@code SecurityContextHolder}
- * ter alguem autenticado quando o usuario escolher entrar - a maioria das
- * paginas do demo continua acessivel sem login, de proposito, isolando a
- * demonstracao de seguranca so ao cadastro/edicao de veterinario.
+ * ({@code SecurityEnforcer}, jta-runtime), nao pelas regras do Spring
+ * Security. O papel do Spring Security aqui e so fornecer o mecanismo de
+ * autenticacao (login) para o {@code SecurityContextHolder} ter alguem
+ * autenticado quando o usuario escolher entrar.
  *
  * <p><b>CSRF (ver SECURITY.md, achado #6):</b> o endpoint de acao do JTA
- * ({@code /__jta/action/**}) e um {@code POST} puro sem token CSRF - o
- * proprio SECURITY.md ja previa que adicionar Spring Security com sessao
- * bloquearia essas acoes com 403 (falha fechado, nao um buraco) a menos
- * que o CSRF seja isento explicitamente para esse caminho. E exatamente
- * o que fazemos aqui - documentado, nao um descuido.
+ * ({@code /__jta/action/**}) e um {@code POST} puro sem token CSRF -
+ * isento explicitamente para nao ser bloqueado com 403 (falha fechado, nao
+ * um buraco - documentado, nao um descuido).
  *
  * <p><b>HTTP Basic + form login juntos:</b> form login e o fluxo pensado
  * para o navegador (link "Entrar" no nav); HTTP Basic fica ligado tambem
- * so para {@code VeterinarioSecurityTest} poder autenticar via
+ * so para os testes de seguranca poderem autenticar via
  * {@code TestRestTemplate.withBasicAuth(...)} sem lidar com a pagina de
  * login gerada automaticamente.
  *
  * <p><b>Usuarios em memoria - so para o demo:</b> {@code admin/admin}
- * (role {@code ADMIN}) e {@code user/user} (role {@code USER}). Isto e
- * deliberadamente inadequado para producao (senhas triviais, sem
- * persistencia) - um app de verdade usaria um
- * {@code UserDetailsService} contra um banco real. Usamos
- * {@link BCryptPasswordEncoder} explicito (nao o atalho depreciado
- * {@code User.withDefaultPasswordEncoder()}) porque este e um demo de
- * referencia - nao deveria ensinar um encoder inseguro nem um metodo
- * marcado como nao-recomendado pelo proprio Spring Security.
+ * (role {@code ADMIN}, gestao de alunos/turmas/professores/disciplinas) e
+ * {@code professor/professor} (role {@code PROFESSOR}, so pode lancar
+ * notas). Deliberadamente inadequado para producao (senhas triviais, sem
+ * persistencia) - um app de verdade usaria um {@code UserDetailsService}
+ * contra um banco real.
  */
 @Configuration
 @EnableWebSecurity
@@ -81,7 +71,7 @@ class SecurityConfig {
     @Bean
     UserDetailsService userDetailsService(PasswordEncoder encoder) {
         var admin = User.withUsername("admin").password(encoder.encode("admin")).roles("ADMIN").build();
-        var user = User.withUsername("user").password(encoder.encode("user")).roles("USER").build();
-        return new InMemoryUserDetailsManager(admin, user);
+        var professor = User.withUsername("professor").password(encoder.encode("professor")).roles("PROFESSOR").build();
+        return new InMemoryUserDetailsManager(admin, professor);
     }
 }

@@ -16,10 +16,13 @@
     <description>
         Aplicacao de demonstracao: prova de ponta a ponta que
         JtaAnnotationProcessor -> .jte gerado -> jte-maven-plugin -> Spring Boot
-        -> HTMX funciona, num dominio unico e coeso (clinica veterinaria,
-        no espirito do Spring PetClinic) - persistencia real com relacoes
-        JPA, CRUD completo, criacao aninhada, validacao, layout, e
-        autenticacao real dogfoodando @RequiresRole.
+        -> HTMX funciona, num dominio unico e coeso (gestao escolar basica:
+        Alunos, Professores, Turmas, Disciplinas, Matriculas, Notas) -
+        persistencia real com relacoes JPA (um-para-muitos e muitos-para-um),
+        CRUD completo, criacao aninhada (matricula via select, nao path
+        param), validacao, layout, busca ao vivo via HTMX, um widget @Sse,
+        e autenticacao real com duas roles distintas (ADMIN/PROFESSOR)
+        dogfoodando @RequiresRole/@AllowAnonymous.
     </description>
 
     <dependencies>

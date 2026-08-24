@@ -1,11 +1,22 @@
-INSERT INTO tutor (id, nome, telefone, endereco) VALUES ('1', 'Maria Silva', '(11) 91234-5678', 'Rua das Flores, 123');
-INSERT INTO tutor (id, nome, telefone, endereco) VALUES ('2', 'Joao Pereira', '(11) 98888-1122', 'Av. Central, 456');
+INSERT INTO professor (id, nome, especialidade) VALUES ('1', 'Ana Ribeiro', 'Matematica');
+INSERT INTO professor (id, nome, especialidade) VALUES ('2', 'Bruno Santos', 'Historia');
 
-INSERT INTO pet (id, nome, especie, tutor_id) VALUES ('1', 'Rex', 'Cachorro', '1');
-INSERT INTO pet (id, nome, especie, tutor_id) VALUES ('2', 'Mimi', 'Gato', '2');
+INSERT INTO disciplina (id, nome, professor_id) VALUES ('1', 'Matematica', '1');
+INSERT INTO disciplina (id, nome, professor_id) VALUES ('2', 'Historia', '2');
+INSERT INTO disciplina (id, nome, professor_id) VALUES ('3', 'Geometria', '1');
 
-INSERT INTO visita (id, data, descricao, pet_id) VALUES ('1', '2026-06-15', 'Vacina antirrabica', '1');
-INSERT INTO visita (id, data, descricao, pet_id) VALUES ('2', '2026-07-02', 'Check-up de rotina', '2');
+INSERT INTO turma (id, nome, ano) VALUES ('1', '9-A', '2026');
+INSERT INTO turma (id, nome, ano) VALUES ('2', '9-B', '2026');
 
-INSERT INTO veterinario (id, nome, especialidade) VALUES ('1', 'Dra. Ana Costa', 'Clinica geral');
-INSERT INTO veterinario (id, nome, especialidade) VALUES ('2', 'Dr. Carlos Souza', 'Cirurgia');
+INSERT INTO aluno (id, nome, email, nascimento) VALUES ('1', 'Maria Silva', 'maria.silva@escola.exemplo', '2011-03-14');
+INSERT INTO aluno (id, nome, email, nascimento) VALUES ('2', 'Joao Pereira', 'joao.pereira@escola.exemplo', '2011-07-22');
+INSERT INTO aluno (id, nome, email, nascimento) VALUES ('3', 'Sofia Costa', 'sofia.costa@escola.exemplo', '2011-01-05');
+INSERT INTO aluno (id, nome, email, nascimento) VALUES ('4', 'Miguel Fernandes', 'miguel.fernandes@escola.exemplo', '2011-11-30');
+
+INSERT INTO matricula (id, aluno_id, turma_id) VALUES ('1', '1', '1');
+INSERT INTO matricula (id, aluno_id, turma_id) VALUES ('2', '2', '1');
+INSERT INTO matricula (id, aluno_id, turma_id) VALUES ('3', '3', '2');
+
+INSERT INTO nota (id, aluno_id, disciplina_id, valor) VALUES ('1', '1', '1', 8.5);
+INSERT INTO nota (id, aluno_id, disciplina_id, valor) VALUES ('2', '1', '2', 7.0);
+INSERT INTO nota (id, aluno_id, disciplina_id, valor) VALUES ('3', '2', '1', 6.0);

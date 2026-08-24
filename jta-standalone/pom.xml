@@ -1,0 +1,103 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <parent>
+        <groupId>dev.jta</groupId>
+        <artifactId>jta-parent</artifactId>
+        <version>0.1.0-SNAPSHOT</version>
+    </parent>
+
+    <artifactId>jta-standalone</artifactId>
+    <packaging>jar</packaging>
+    <name>jta-standalone</name>
+    <description>
+        Runner zero-dependencias do JTA: serve componentes/paginas via
+        com.sun.net.httpserver.HttpServer (embutido no JDK), sem nenhum
+        framework web/DI por baixo. Camada fina de traducao HTTP sobre
+        jta-runtime, incluindo o unico bloco de routing genuino desta
+        entrega (casamento de padrao "/x/{id}" - todos os outros
+        adaptadores reusam o router do proprio framework hospedeiro).
+    </description>
+
+    <dependencies>
+        <dependency>
+            <groupId>dev.jta</groupId>
+            <artifactId>jta-core</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>dev.jta</groupId>
+            <artifactId>jta-runtime</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>dev.jta</groupId>
+            <artifactId>jta-processor</artifactId>
+            <version>${project.version}</version>
+            <!-- entra como annotation processor nos consumidores, nunca em runtime -->
+            <scope>provided</scope>
+        </dependency>
+        <dependency>
+            <groupId>gg.jte</groupId>
+            <artifactId>jte</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>jakarta.validation</groupId>
+            <artifactId>jakarta.validation-api</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.slf4j</groupId>
+            <artifactId>slf4j-api</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.junit.jupiter</groupId>
+            <artifactId>junit-jupiter</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.slf4j</groupId>
+            <artifactId>slf4j-simple</artifactId>
+            <scope>test</scope>
+        </dependency>
+    </dependencies>
+
+    <build>
+        <plugins>
+            <plugin>
+                <!-- so para os fixtures de teste deste modulo - um consumidor
+                     real declara isto na propria app, como o jta-demo ja faz. -->
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-compiler-plugin</artifactId>
+                <configuration>
+                    <annotationProcessorPaths>
+                        <path>
+                            <groupId>dev.jta</groupId>
+                            <artifactId>jta-processor</artifactId>
+                            <version>${project.version}</version>
+                        </path>
+                    </annotationProcessorPaths>
+                </configuration>
+            </plugin>
+            <plugin>
+                <groupId>gg.jte</groupId>
+                <artifactId>jte-maven-plugin</artifactId>
+                <executions>
+                    <execution>
+                        <phase>process-test-classes</phase>
+                        <goals>
+                            <goal>precompile</goal>
+                        </goals>
+                    </execution>
+                </executions>
+                <configuration>
+                    <sourceDirectory>${project.build.directory}/generated-test-sources/test-annotations/jta-templates</sourceDirectory>
+                    <targetDirectory>${project.build.testOutputDirectory}</targetDirectory>
+                    <contentType>Html</contentType>
+                </configuration>
+            </plugin>
+        </plugins>
+    </build>
+</project>

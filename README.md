@@ -79,7 +79,7 @@ mvn spring-boot:run
 | `jta-runtime` | Núcleo de runtime **agnóstico de framework web**: `ComponentInvoker`, `SecurityEnforcer`, `JtaActionDispatcher`/`JtaPageDispatcher`, `PageShellRenderer` | `jta-core`, JTE |
 | `jta-cli` | `jta init`, `jta new component` | nenhuma |
 | `jta-spring-boot-starter` | Adaptador fino do Spring MVC/Spring Security sobre `jta-runtime`: registro de rotas, controllers, SSE | `jta-runtime`, Spring Boot |
-| `jta-demo` | App de exemplo — clínica veterinária (Tutores/Pets/Visitas/Veterinários), no espírito do Spring PetClinic | tudo acima |
+| `jta-demo` | App de exemplo — gestão escolar básica (Alunos/Professores/Turmas/Disciplinas/Matrículas/Notas) | tudo acima |
 
 Pipeline: `@AComponent` → `JtaAnnotationProcessor` (compile-time) →
 `.jte` gerado → `jte-maven-plugin` (precompilado) → `jta-runtime`
@@ -94,21 +94,24 @@ em cima dele, sem reimplementar os allowlists de segurança
 
 ## Demo incluído
 
-Domínio único (clínica veterinária), no espírito do Spring PetClinic:
+Domínio único (gestão escolar básica: Alunos, Professores, Turmas,
+Disciplinas, Matrículas, Notas):
 
 | Rota | Demonstra |
 |---|---|
-| `/` | Nav compartilhada via `@Layout`/`<router-outlet/>` |
-| `/contador` | Estado simples, sem DI, CSS via `styleUrl()` externo |
-| `/tutores` | Listagem via `@for`, persistência real (JPA + H2) |
-| `/tutores/{id}` | Path param + DI + relação um-para-muitos (pets do tutor) |
-| `/tutores/novo`, `/tutores/{id}/editar` | DI + Jakarta Validation + `Redirect` + `init()` |
-| `/tutores/{tutorId}/pets/novo` | Criação **aninhada** — path param usado como FK |
-| `/pets/{id}` | Ação que cria um registro filho (visita) direto da página de detalhe do pai |
-| `/veterinarios` | Listagem aberta |
-| `/veterinarios/novo`, `/veterinarios/{id}/editar` | Protegidas por `@RequiresRole("ADMIN")` — entre como `admin`/`admin` (ou `user`/`user` para ver o `403`) |
-| `/tarefas` | `@if`/`@for` (JTE puro) + toggle de campo `boolean` |
-| `/contato` | Jakarta Validation bloqueando a ação em dados inválidos |
+| `/` | Nav compartilhada via `@Layout`/`<router-outlet/>` + widget `@Sse` ao vivo (contagem de matrículas, só suportado pelo adaptador Spring) |
+| `/turmas`, `/disciplinas` | Catálogo público — `@AllowAnonymous` explícito, sem login |
+| `/turmas/novo`, `/turmas/{id}/editar` | Mesmo prefixo do catálogo público, mas protegidas por `@RequiresRole("ADMIN")` |
+| `/alunos` | Listagem com **busca ao vivo via HTMX** (query param + `hx-select`/`hx-swap`, sem JS próprio), protegida por `@RequiresRole("ADMIN")` |
+| `/alunos/{id}` | Path param + DI de múltiplos serviços + duas relações (matrículas, notas) |
+| `/alunos/{id}` (ação `matricular`) | Criação **aninhada** — FK escolhida via `<select>` (não path param), não path variable |
+| `/alunos/novo`, `/alunos/{id}/editar` | DI + Jakarta Validation (`@NotBlank`/`@Email`) + `Redirect` + `init()` |
+| `/professores`, `/professores/novo` | CRUD protegido por `@RequiresRole("ADMIN")` |
+| `/disciplinas/novo` | FK escolhida via `<select>` + `@Bindable` explícito (campo nunca interpolado no template) |
+| `/notas/lancar/{alunoId}` | Protegida por `@RequiresRole("PROFESSOR")` — uma role **diferente** de ADMIN, provando autorização por role de verdade, não só "logado ou não" |
+
+Entre como `admin`/`admin` (gestão completa) ou `professor`/`professor`
+(só lançamento de notas — tente `/alunos/novo` para ver o `403`).
 
 ## Segurança
 

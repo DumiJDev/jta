@@ -20,6 +20,9 @@
         <module>jta-processor</module>
         <module>jta-runtime</module>
         <module>jta-spring-boot-starter</module>
+        <module>jta-javalin-starter</module>
+        <module>jta-standalone</module>
+        <module>jta-quarkus-extension</module>
         <module>jta-cli</module>
         <module>jta-demo</module>
     </modules>
@@ -37,6 +40,8 @@
         <toml.version>0.7.3</toml.version>
         <jakarta-validation.version>3.1.0</jakarta-validation.version>
         <junit.version>5.11.0</junit.version>
+        <javalin.version>7.2.3</javalin.version>
+        <quarkus.version>3.15.1</quarkus.version>
     </properties>
 
     <dependencyManagement>
@@ -50,9 +55,23 @@
             </dependency>
 
             <dependency>
+                <groupId>io.quarkus</groupId>
+                <artifactId>quarkus-bom</artifactId>
+                <version>${quarkus.version}</version>
+                <type>pom</type>
+                <scope>import</scope>
+            </dependency>
+
+            <dependency>
                 <groupId>gg.jte</groupId>
                 <artifactId>jte</artifactId>
                 <version>${jte.version}</version>
+            </dependency>
+
+            <dependency>
+                <groupId>io.javalin</groupId>
+                <artifactId>javalin</artifactId>
+                <version>${javalin.version}</version>
             </dependency>
 
             <dependency>

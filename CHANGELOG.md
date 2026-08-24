@@ -4,6 +4,34 @@ Histórico de decisões e mudanças, em ordem cronológica inversa. O
 `README.md` foca no estado atual do projeto; este arquivo guarda o
 raciocínio por trás de como ele chegou lá.
 
+## 2026-08-24 (c) — Demo reformado para gestão escolar
+
+- **`jta-demo` refeito do zero**: domínio de clínica veterinária (Tutores/
+  Pets/Visitas/Veterinários) substituído por gestão escolar básica (Alunos,
+  Professores, Turmas, Disciplinas, Matrículas, Notas). Mesmos conceitos de
+  sempre (DI, JPA com relações um-para-muitos e muitos-para-um, CRUD, path
+  params, Jakarta Validation, `init()`, `Redirect`), mais três padrões
+  novos: **busca ao vivo via HTMX** em `/alunos` (query param + `hx-select`/
+  `hx-swap`, sem endpoint de fragmento dedicado — reaproveita a própria
+  rota GET da página); **duas roles distintas** (`ADMIN`/`PROFESSOR` em vez
+  de `ADMIN`/`USER`), provando que `@RequiresRole` autoriza por role
+  específica e não só "logado ou não" (`/notas/lancar/{alunoId}` nega
+  ADMIN e permite PROFESSOR, o inverso do que as páginas de ADMIN fazem);
+  e um widget `@Sse` na home (contagem de matrículas ativas, re-renderizado
+  a cada 3s) — único recurso desta entrega que só o adaptador Spring
+  suporta hoje.
+- `SecurityRegressionTest` (achados #1/#5 do SECURITY.md, mass assignment e
+  invocação arbitrária de método) e a suite de autorização por role foram
+  reescritas contra o novo domínio, mantendo a mesma cobertura de
+  regressão — nenhuma proteção foi removida ou enfraquecida na troca.
+- **Nota de processo**: o processor do JTA rejeita qualquer `@` literal em
+  texto de template (mesmo dentro de `@raw ... @endraw`) como possível
+  início de diretiva — texto descritivo que menciona anotações (`@Sse`,
+  `@RequiresRole`) ou URLs com versão pinada (`pacote@1.2.3`) precisa
+  evitar o caractere por completo, não só escapá-lo. Limitação descoberta
+  escrevendo a home do novo demo; documentada aqui para não redescobrir na
+  próxima vez.
+
 ## 2026-08-24 (b) — Núcleo agnóstico de framework (`jta-runtime`) e demo reformado
 
 - **Novo módulo `jta-runtime`**: extraído de `jta-spring-boot-starter` para
