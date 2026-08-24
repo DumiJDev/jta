@@ -1,0 +1,10 @@
+<div>
+<nav class="jta-nav">
+<a class="jta-brand" href="/">JTA Demo</a>
+<a href="/contador">Contador</a>
+<a href="/produtos">Produtos</a>
+<a href="/tarefas">Tarefas</a>
+<a href="/contato">Contato</a>
+</nav>
+<router-outlet/>
+</div>

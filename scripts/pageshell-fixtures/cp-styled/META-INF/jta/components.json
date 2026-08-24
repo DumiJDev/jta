@@ -1,0 +1,13 @@
+[
+  {
+    "fqn": "dev.jta.demo.Foo",
+    "selector": "dev-jta-demo-foo",
+    "explicitSelector": false,
+    "routePath": null,
+    "actions": [],
+    "generatedJteTemplate": "dev/jta/demo/Foo.jte",
+    "scopedCss": "[data-jta-component=\"dev-jta-demo-foo\"] p { color: hotpink; }",
+    "isLayout": false,
+    "layoutFqn": null
+  }
+]

@@ -1,0 +1,21 @@
+target/
+*.class
+
+# Build/IDE
+.idea/
+*.iml
+.vscode/
+.settings/
+.classpath
+.project
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Ferramentas locais deste projeto (nao fazem parte do codigo/produto)
+.claude/
+graphify-out/
+
+# Logs
+*.log

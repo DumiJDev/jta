@@ -1,0 +1,62 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <parent>
+        <groupId>dev.jta</groupId>
+        <artifactId>jta-parent</artifactId>
+        <version>0.1.0-SNAPSHOT</version>
+    </parent>
+
+    <artifactId>jta-processor</artifactId>
+    <packaging>jar</packaging>
+    <name>jta-processor</name>
+    <description>
+        JtaAnnotationProcessor: le classes @AComponent em compile-time, valida
+        bindings contra os campos/metodos da classe, deriva/valida o seletor
+        canonico, gera o .jte correspondente e emite META-INF/jta/components.json.
+        MVP: transformacao de template regex-based (ver ADR no README) - o
+        parser de expressoes real do JTE fica para uma fase futura, por decisao
+        explicita de reduzir escopo e nao duplicar o que o JTE ja resolve.
+    </description>
+
+    <!--
+        MVP: colisao de selector explicito DENTRO do mesmo modulo e
+        detectada durante a mesma rodada de compilacao (RoundEnvironment ja
+        enxerga todos os @AComponent sendo compilados). Colisao ENTRE jars
+        independentes (bibliotecas de terceiros combinadas em runtime) e
+        pega por ComponentRegistry no boot da aplicacao. Scanning de
+        classpath completo em compile-time (ex: via ClassGraph, para pegar
+        colisao contra dependencias .jar antes mesmo do boot) fica para uma
+        fase futura - nao e necessario para a garantia de correcao, so
+        adianta o feedback do erro.
+    -->
+    <dependencies>
+        <dependency>
+            <groupId>dev.jta</groupId>
+            <artifactId>jta-core</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>org.junit.jupiter</groupId>
+            <artifactId>junit-jupiter</artifactId>
+            <scope>test</scope>
+        </dependency>
+    </dependencies>
+
+    <build>
+        <plugins>
+            <plugin>
+                <!-- o proprio jta-processor NAO se auto-processa: annotation
+                     processors nao podem processar a si mesmos no mesmo modulo -->
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-compiler-plugin</artifactId>
+                <configuration>
+                    <proc>none</proc>
+                </configuration>
+            </plugin>
+        </plugins>
+    </build>
+</project>

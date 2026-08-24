@@ -1,0 +1,28 @@
+name: build
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: maven
+
+      # mvn verify roda os testes de todos os modulos, incluindo o
+      # ContadorIntegrationTest (que sobe a aplicacao de verdade e bate
+      # em /contador e /__jta/action/... - e o que teria pego os bugs
+      # de manifest ausente, TemplateEngine on-demand vs precompilado,
+      # HTMX nunca importado, CSS nunca emitido e @PathVariable sem
+      # -parameters antes de chegarem a producao).
+      - name: mvn verify
+        run: mvn -B verify

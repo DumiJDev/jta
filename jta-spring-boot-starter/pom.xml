@@ -1,0 +1,69 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <parent>
+        <groupId>dev.jta</groupId>
+        <artifactId>jta-parent</artifactId>
+        <version>0.1.0-SNAPSHOT</version>
+    </parent>
+
+    <artifactId>jta-spring-boot-starter</artifactId>
+    <packaging>jar</packaging>
+    <name>jta-spring-boot-starter</name>
+    <description>
+        Integracao do JTA com Spring Boot: carrega o ComponentRegistry gerado
+        em compile-time, registra as paginas de @Route, e expoe o endpoint
+        generico de acoes HTMX (/__jta/action/{selector}).
+    </description>
+
+    <dependencies>
+        <dependency>
+            <groupId>org.springframework.security</groupId>
+            <artifactId>spring-security-core</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>dev.jta</groupId>
+            <artifactId>jta-core</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>dev.jta</groupId>
+            <artifactId>jta-processor</artifactId>
+            <version>${project.version}</version>
+            <!-- entra como annotation processor nos consumidores, nunca em runtime -->
+            <scope>provided</scope>
+        </dependency>
+        <dependency>
+            <groupId>gg.jte</groupId>
+            <artifactId>jte</artifactId>
+        </dependency>
+        <dependency>
+            <!-- declarado explicitamente (nao so transitivo via spring-boot-starter-web)
+                 porque JtaSecurityEnforcer/JtaActionController/JtaExceptionHandler
+                 importam org.slf4j.Logger diretamente - um consumidor que excluir
+                 spring-boot-starter-logging nao deveria quebrar a compilacao do starter. -->
+            <groupId>org.slf4j</groupId>
+            <artifactId>slf4j-api</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-web</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-autoconfigure</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>jakarta.validation</groupId>
+            <artifactId>jakarta.validation-api</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-configuration-processor</artifactId>
+            <optional>true</optional>
+        </dependency>
+    </dependencies>
+</project>
