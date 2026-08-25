@@ -107,7 +107,8 @@ class JtaRouteRegistrar implements InitializingBean {
 
         String cookieHeader = request.getHeader("Cookie");
         PageResult result = dispatcher.dispatch(metadata, request.getParameterMap(), pathVariables,
-                SpringCurrentUser.current(), new ServletJtaSession(request.getSession(true)), cookieHeader);
+                SpringCurrentUser.current(), new ServletJtaSession(request.getSession(true)), cookieHeader,
+                request.getHeader("Accept-Language"));
 
         if (result instanceof PageResult.Forbidden) {
             return errorResponse(HttpStatus.FORBIDDEN, request.getRequestURI());

@@ -1,7 +1,9 @@
 package dev.jta.spring;
 
+import dev.jta.core.AcceptLanguageLocaleResolver;
 import dev.jta.core.ComponentRegistry;
 import dev.jta.core.JtaConfig;
+import dev.jta.core.LocaleResolver;
 import dev.jta.runtime.ComponentInvoker;
 import dev.jta.runtime.JtaActionDispatcher;
 import dev.jta.runtime.JtaErrorPageRenderer;
@@ -18,6 +20,8 @@ import org.springframework.boot.web.servlet.error.ErrorController;
 import org.springframework.context.ApplicationContext;
 import org.springframework.context.annotation.Bean;
 import org.springframework.web.servlet.mvc.method.annotation.RequestMappingHandlerMapping;
+
+import java.util.Locale;
 
 /**
  * Auto-configuracao do starter: liga o {@link ComponentRegistry} (lido do
@@ -74,6 +78,22 @@ public class JtaAutoConfiguration {
         return TemplateEngine.createPrecompiled(ContentType.Html);
     }
 
+    /**
+     * Resolve o locale de cada requisicao a partir do header
+     * {@code Accept-Language}, caindo no locale configurado em
+     * {@code jta.config.toml} ({@code [i18n] default_locale = "pt"}, tag
+     * BCP 47) ou em {@link Locale#getDefault()} se nao configurado - ver
+     * {@code Translations}/{@code LocaleContext} para onde isso e
+     * consumido.
+     */
+    @Bean
+    @ConditionalOnMissingBean
+    public LocaleResolver jtaLocaleResolver(JtaConfig config) {
+        String tag = config.getString("i18n", "default_locale", "");
+        Locale defaultLocale = tag.isBlank() ? Locale.getDefault() : Locale.forLanguageTag(tag);
+        return new AcceptLanguageLocaleResolver(defaultLocale);
+    }
+
     @Bean
     @ConditionalOnMissingBean
     public ComponentInvoker jtaComponentInvoker(ApplicationContext ctx) {
@@ -90,15 +110,17 @@ public class JtaAutoConfiguration {
     @ConditionalOnMissingBean
     public JtaActionDispatcher jtaActionDispatcher(ComponentRegistry registry, ComponentInvoker invoker, TemplateEngine templateEngine,
                                                      ObjectProvider<jakarta.validation.Validator> validatorProvider,
-                                                     CsrfTokenStore csrfTokenStore) {
-        return new JtaActionDispatcher(registry, invoker, templateEngine, validatorProvider.getIfAvailable(), csrfTokenStore);
+                                                     CsrfTokenStore csrfTokenStore, LocaleResolver localeResolver) {
+        return new JtaActionDispatcher(registry, invoker, templateEngine, validatorProvider.getIfAvailable(),
+                csrfTokenStore, localeResolver);
     }
 
     @Bean
     @ConditionalOnMissingBean
     public JtaPageDispatcher jtaPageDispatcher(ComponentRegistry registry, ComponentInvoker invoker, TemplateEngine templateEngine,
-                                                 JtaConfig config, CsrfTokenStore csrfTokenStore) {
-        return new JtaPageDispatcher(registry, invoker, templateEngine, config, csrfTokenStore);
+                                                 JtaConfig config, CsrfTokenStore csrfTokenStore,
+                                                 LocaleResolver localeResolver) {
+        return new JtaPageDispatcher(registry, invoker, templateEngine, config, csrfTokenStore, localeResolver);
     }
 
     @Bean

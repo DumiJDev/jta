@@ -53,7 +53,8 @@ class JtaActionController {
         CsrfRequest csrf = new CsrfRequest(cookieHeader, csrfHeaderValue);
 
         ActionResult result = dispatcher.dispatch(selector, action, request.getParameterMap(),
-                SpringCurrentUser.current(), new ServletJtaSession(request.getSession(true)), csrf, extractUploads(request));
+                SpringCurrentUser.current(), new ServletJtaSession(request.getSession(true)), csrf,
+                extractUploads(request), request.getHeader("Accept-Language"));
 
         if (result instanceof ActionResult.Forbidden) {
             return ResponseEntity.status(HttpStatus.FORBIDDEN).build();

@@ -1,5 +1,7 @@
 package dev.jta.runtime;
 
+import dev.jta.core.ConversionException;
+import dev.jta.core.ConverterRegistry;
 import dev.jta.runtime.session.JtaSession;
 import dev.jta.runtime.upload.UploadedFile;
 import jakarta.validation.ConstraintViolation;
@@ -9,6 +11,7 @@ import java.lang.reflect.Field;
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
 import java.lang.reflect.Modifier;
+import java.util.List;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Set;
@@ -27,19 +30,33 @@ import java.util.Set;
  * vez de conter a logica do {@code ApplicationContext} do Spring
  * diretamente. Todo o resto (populate/invoke/validate) e identico.
  *
- * <p><b>Limitacao conhecida do MVP:</b> conversao de parametros suporta
- * apenas {@code String}, {@code int}/{@code Integer}, {@code long}/
- * {@code Long}, {@code double}/{@code Double} e {@code boolean}/
- * {@code Boolean}. Tipos compostos (listas, objetos aninhados) precisam
- * ser carregados pelo proprio componente via um servico injetado, nao
- * por bind automatico de query param.
+ * <p><b>Conversao de tipos</b> (fase de correcao de dados): delegada a
+ * {@link ConverterRegistry} (jta-core) em vez de viver embutida aqui -
+ * ver essa classe para a lista completa de tipos suportados (primitivos,
+ * enums, {@code LocalDate}/{@code LocalDateTime}, {@code BigDecimal},
+ * {@code UUID}, {@code List<T>}/arrays, {@code Optional<T>}) e para o que
+ * e validado em compile-time por {@code JtaAnnotationProcessor} contra
+ * essa mesma lista. Uma falha de conversao nunca mais e ignorada
+ * silenciosamente nem propaga crua: vira uma entrada no
+ * {@code Map<String,String>} de erros devolvido por
+ * {@link #populateFromParams}/{@link #populateFromPathVariables}, no
+ * mesmo formato que {@link #validate} ja usa para violacoes de Bean
+ * Validation - o chamador (ver {@code JtaActionDispatcher}/
+ * {@code JtaPageDispatcher}) funde os dois e os aplica via
+ * {@link #applyErrors}.
  */
 public final class ComponentInvoker {
 
     private final ComponentFactory factory;
+    private final ConverterRegistry converters;
 
     public ComponentInvoker(ComponentFactory factory) {
+        this(factory, new ConverterRegistry());
+    }
+
+    public ComponentInvoker(ComponentFactory factory, ConverterRegistry converters) {
         this.factory = factory;
+        this.converters = converters;
     }
 
     public Object instantiate(Class<?> type) {
@@ -105,8 +122,19 @@ public final class ComponentInvoker {
      * classico). {@code bindableFields} vem de
      * {@code ComponentMetadata.bindableFields()}, computado pelo
      * processor em compile-time a partir do que o template realmente usa.
+     *
+     * <p>Campos {@code List<T>}/array recebem todos os valores enviados
+     * para aquele nome (bind multi-valor); qualquer outro tipo usa o
+     * ultimo valor da lista (convencao de formulario HTML - ex: o truque
+     * de checkbox com um {@code <input type="hidden">} do mesmo nome
+     * antes dele no DOM, onde o valor que deve prevalecer e o ultimo).
+     *
+     * @return mapa de erros de conversao (campo -&gt; mensagem), vazio se
+     *         nada falhou - mesmo formato usado por {@link #validate},
+     *         para o chamador fundir os dois antes de {@link #applyErrors}
      */
-    public void populateFromParams(Object instance, Map<String, String[]> params, Set<String> bindableFields) {
+    public Map<String, String> populateFromParams(Object instance, Map<String, String[]> params, Set<String> bindableFields) {
+        Map<String, String> errors = new LinkedHashMap<>();
         for (Field field : instance.getClass().getFields()) {
             if (Modifier.isStatic(field.getModifiers())) {
                 continue;
@@ -118,8 +146,9 @@ public final class ComponentInvoker {
             if (values == null || values.length == 0) {
                 continue;
             }
-            setField(instance, field, values[0]);
+            setField(instance, field, values, errors);
         }
+        return errors;
     }
 
     /**
@@ -128,11 +157,14 @@ public final class ComponentInvoker {
      * em jta-spring-boot-starter). Compartilha a mesma conversao de tipo,
      * o mesmo mecanismo de "campo publico = estado", e a mesma restricao
      * a {@code bindableFields} usada para query params - a diferenca e so
-     * de onde o valor vem na requisicao.
+     * de onde o valor vem na requisicao (sempre um unico valor).
+     *
+     * @return mapa de erros de conversao, no mesmo formato de {@link #populateFromParams}
      */
-    public void populateFromPathVariables(Object instance, Map<String, String> pathVariables, Set<String> bindableFields) {
+    public Map<String, String> populateFromPathVariables(Object instance, Map<String, String> pathVariables, Set<String> bindableFields) {
+        Map<String, String> errors = new LinkedHashMap<>();
         if (pathVariables == null || pathVariables.isEmpty()) {
-            return;
+            return errors;
         }
         for (Field field : instance.getClass().getFields()) {
             if (Modifier.isStatic(field.getModifiers())) {
@@ -145,8 +177,9 @@ public final class ComponentInvoker {
             if (value == null) {
                 continue;
             }
-            setField(instance, field, value);
+            setField(instance, field, new String[] {value}, errors);
         }
+        return errors;
     }
 
     /**
@@ -193,84 +226,60 @@ public final class ComponentInvoker {
         return dev.jta.core.ReservedFieldNames.ALL.contains(name);
     }
 
-    private void setField(Object instance, Field field, String rawValue) {
+    /**
+     * Converte {@code rawValues} (via {@link ConverterRegistry}, usando o
+     * tipo generico do campo para resolver {@code List<T>}/{@code Optional<T>})
+     * e atribui ao campo. Uma {@link ConversionException} (dado invalido
+     * do usuario) vira uma entrada em {@code errorsOut} em vez de
+     * propagar - falha de acesso via reflection ({@link IllegalAccessException},
+     * so pode ser bug do framework, ja que o campo e sempre publico)
+     * continua propagando como {@link IllegalStateException}, igual ao
+     * resto desta classe.
+     */
+    private void setField(Object instance, Field field, String[] rawValues, Map<String, String> errorsOut) {
+        Object converted;
         try {
-            Object converted = convert(rawValue, field.getType());
-            if (converted != null) {
-                field.set(instance, converted);
+            Class<?> type = field.getType();
+            if (List.class.isAssignableFrom(type) || type.isArray()) {
+                converted = converters.convertMulti(field.getGenericType(), List.of(rawValues));
+            } else {
+                converted = converters.convert(field.getGenericType(), rawValues[rawValues.length - 1]);
             }
-            // tipo nao suportado (convert devolveu null): ignorado
-            // silenciosamente no MVP - o componente mantem o valor default
-            // do campo. Documentado como limitacao.
-        } catch (IllegalAccessException | NumberFormatException e) {
-            throw new IllegalArgumentException("Nao foi possivel converter '" + rawValue + "' para o campo '"
-                    + field.getName() + "' (" + field.getType().getSimpleName() + ") em " + instance.getClass().getName(), e);
+        } catch (ConversionException e) {
+            errorsOut.put(field.getName(), e.getMessage());
+            return;
+        }
+        try {
+            field.set(instance, converted);
+        } catch (IllegalAccessException e) {
+            throw new IllegalStateException("Nao foi possivel popular o campo '" + field.getName() + "' em "
+                    + instance.getClass().getName(), e);
         }
     }
 
     /**
      * Coercao de {@code String} (sempre a forma em que um valor chega de
      * uma requisicao HTTP - query param, path variable, form data, ou
-     * argumento posicional de acao {@code __jtaArgN}) para um dos tipos
-     * simples suportados. Extraido de {@link #setField} para ser
-     * reutilizado tambem por {@link #invokeAction(Object, String, String[])}
-     * - as duas vias (campo de estado, argumento de acao) NUNCA devem
+     * argumento posicional de acao {@code __jtaArgN}) para o tipo alvo,
+     * delegada ao mesmo {@link ConverterRegistry} que {@link #setField}
+     * usa - as duas vias (campo de estado, argumento de acao) NUNCA devem
      * divergir silenciosamente na lista de tipos suportados.
      *
-     * @return o valor convertido, ou {@code null} se {@code targetType}
-     *         nao e um dos tipos suportados (chamador decide o que fazer:
-     *         {@link #setField} ignora silenciosamente, {@link #invokeAction}
-     *         nunca deveria chegar aqui com um tipo nao suportado porque o
-     *         processor ja rejeita isso em compile-time).
+     * <p>Antes da fase de correcao de dados esta coercao era uma cadeia de
+     * {@code if} local com uma lista de tipos propria; unificar as duas
+     * vias no registry e o que garante que enums, {@code LocalDate},
+     * {@code UUID} e afins - e o parse de booleano ciente de checkbox
+     * ({@code "on"}) - valham igualmente para argumentos de acao.
+     *
+     * @throws ConversionException se o valor nao puder ser convertido ou o
+     *                             tipo nao for suportado - o processor ja
+     *                             rejeita tipo de parametro de acao nao
+     *                             suportado em compile-time, entao aqui
+     *                             isso so acontece com dado invalido do
+     *                             utilizador.
      */
-    private static Object convert(String rawValue, Class<?> targetType) {
-        if (targetType == String.class) {
-            return rawValue;
-        } else if (targetType == int.class || targetType == Integer.class) {
-            return Integer.parseInt(rawValue);
-        } else if (targetType == long.class || targetType == Long.class) {
-            return Long.parseLong(rawValue);
-        } else if (targetType == double.class || targetType == Double.class) {
-            return Double.parseDouble(rawValue);
-        } else if (targetType == boolean.class || targetType == Boolean.class) {
-            return parseCheckboxAwareBoolean(rawValue);
-        }
-        return null;
-    }
-
-    /**
-     * Converte o valor cru de um campo booleano vindo da requisicao.
-     *
-     * <p>{@code Boolean.parseBoolean} sozinho nao serve aqui: ele so
-     * reconhece a string literal {@code "true"}, e um
-     * {@code <input type="checkbox" name="ativo">} sem atributo
-     * {@code value} explicito envia {@code "on"} quando marcado - o valor
-     * default do HTML. O resultado era um checkbox que ficava
-     * silenciosamente {@code false} por mais que o utilizador o marcasse,
-     * sem erro nem log: nao era um tipo "nao suportado", era um tipo da
-     * lista dos suportados a converter mal.
-     *
-     * <p>Aceita as formas que um formulario HTML realmente produz
-     * ({@code on}) e as que um cliente programatico costuma enviar
-     * ({@code true}, {@code 1}, {@code yes}), sem diferenciar maiusculas.
-     * Qualquer outro valor - incluindo a ausencia do parametro, tratada
-     * antes daqui - e {@code false}, que e a semantica correta de um
-     * checkbox nao marcado (o browser simplesmente nao envia o campo).
-     *
-     * <p>Reutilizada por {@link #convert}, portanto tambem se aplica a
-     * argumentos de acao ({@code __jtaArgN}) do tipo {@code boolean} - as
-     * duas vias de entrada de dados da requisicao nunca devem divergir
-     * silenciosamente na conversao de tipos.
-     */
-    private static boolean parseCheckboxAwareBoolean(String rawValue) {
-        if (rawValue == null) {
-            return false;
-        }
-        String normalized = rawValue.trim();
-        return normalized.equalsIgnoreCase("true")
-                || normalized.equalsIgnoreCase("on")
-                || normalized.equalsIgnoreCase("yes")
-                || normalized.equals("1");
+    private Object convert(String rawValue, Class<?> targetType) {
+        return converters.convert(targetType, rawValue);
     }
 
     /**

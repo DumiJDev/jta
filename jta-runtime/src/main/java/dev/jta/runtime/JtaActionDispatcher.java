@@ -2,6 +2,8 @@ package dev.jta.runtime;
 
 import dev.jta.core.ComponentMetadata;
 import dev.jta.core.ComponentRegistry;
+import dev.jta.core.LocaleContext;
+import dev.jta.core.LocaleResolver;
 import dev.jta.core.Redirect;
 import dev.jta.runtime.csrf.CsrfRequest;
 import dev.jta.runtime.csrf.CsrfTokenStore;
@@ -53,14 +55,21 @@ public final class JtaActionDispatcher {
     private final TemplateEngine templateEngine;
     private final Validator validator;
     private final CsrfTokenStore csrfTokenStore;
+    private final LocaleResolver localeResolver;
 
     public JtaActionDispatcher(ComponentRegistry registry, ComponentInvoker invoker, TemplateEngine templateEngine,
                                 Validator validator, CsrfTokenStore csrfTokenStore) {
+        this(registry, invoker, templateEngine, validator, csrfTokenStore, LocaleResolver.acceptLanguageOrDefault());
+    }
+
+    public JtaActionDispatcher(ComponentRegistry registry, ComponentInvoker invoker, TemplateEngine templateEngine,
+                                Validator validator, CsrfTokenStore csrfTokenStore, LocaleResolver localeResolver) {
         this.registry = registry;
         this.invoker = invoker;
         this.templateEngine = templateEngine;
         this.validator = validator;
         this.csrfTokenStore = csrfTokenStore;
+        this.localeResolver = localeResolver;
     }
 
     public ActionResult dispatch(String selector, String action, Map<String, String[]> params, CurrentUser user,
@@ -78,6 +87,33 @@ public final class JtaActionDispatcher {
      */
     public ActionResult dispatch(String selector, String action, Map<String, String[]> params, CurrentUser user,
                                   JtaSession session, CsrfRequest csrf, Map<String, UploadedFile> uploads) {
+        return dispatch(selector, action, params, user, session, csrf, uploads, null);
+    }
+
+    /**
+     * Sobrecarga completa.
+     *
+     * @param acceptLanguageHeader valor bruto do header HTTP {@code Accept-Language}
+     *                             da requisicao, ou {@code null} se ausente/o
+     *                             adaptador ainda nao repassa esse dado -
+     *                             resolvido via {@link LocaleResolver} e
+     *                             publicado em {@link LocaleContext} durante
+     *                             toda a duracao desta chamada (ver
+     *                             {@code Translations#translate}).
+     */
+    public ActionResult dispatch(String selector, String action, Map<String, String[]> params, CurrentUser user,
+                                  JtaSession session, CsrfRequest csrf, Map<String, UploadedFile> uploads,
+                                  String acceptLanguageHeader) {
+        LocaleContext.set(localeResolver.resolve(acceptLanguageHeader));
+        try {
+            return doDispatch(selector, action, params, user, session, csrf, uploads);
+        } finally {
+            LocaleContext.clear();
+        }
+    }
+
+    private ActionResult doDispatch(String selector, String action, Map<String, String[]> params, CurrentUser user,
+                                     JtaSession session, CsrfRequest csrf, Map<String, UploadedFile> uploads) {
         ComponentMetadata metadata = registry.bySelector(selector);
 
         if (!metadata.csrfExempt() && !csrfTokenStore.verify(csrf.cookieHeader(), csrf.headerValue())) {
@@ -119,17 +155,27 @@ public final class JtaActionDispatcher {
             throw new IllegalStateException("Classe do componente nao encontrada: " + metadata.fqn(), e);
         }
 
-        invoker.populateFromParams(instance, params, Set.copyOf(metadata.bindableFields()));
+        // erros de conversao (ex: 'abc' para um campo int) entram no mesmo
+        // mapa que violacoes de Bean Validation - nunca mais propagam crus
+        // (ver ComponentInvoker#setField/ConverterRegistry).
+        Map<String, String> conversionErrors = invoker.populateFromParams(instance, params, Set.copyOf(metadata.bindableFields()));
         invoker.populateUploads(instance, uploads, Set.copyOf(metadata.uploadFields()));
         invoker.applySession(instance, session);
         invoker.callInitIfPresent(instance);
 
-        Map<String, String> errors = validator != null ? invoker.validate(instance, validator) : Map.of();
+        Map<String, String> validationErrors = validator != null ? invoker.validate(instance, validator) : Map.of();
+
+        Map<String, String> errors = new LinkedHashMap<>(validationErrors);
+        // erro de conversao prevalece sobre erro de validacao no mesmo
+        // campo: se o valor nem chegou a virar um dado valido, a mensagem
+        // mais util pro usuario e a de conversao, nao a da constraint
+        // (que rodou contra o valor default do campo).
+        errors.putAll(conversionErrors);
         invoker.applyErrors(instance, errors);
 
-        // so invoca a acao se a validacao passou (ou se nao ha validator
-        // configurado, ou seja, o dev nao optou por validacao nenhuma) -
-        // dados invalidos nunca chegam ao codigo da acao.
+        // so invoca a acao se a validacao/conversao passou (ou se nao ha
+        // validator configurado, ou seja, o dev nao optou por validacao
+        // nenhuma) - dados invalidos nunca chegam ao codigo da acao.
         if (errors.isEmpty()) {
             try {
                 invoker.invokeAction(instance, action, actionArgs);
