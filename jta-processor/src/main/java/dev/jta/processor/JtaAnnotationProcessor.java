@@ -3,6 +3,7 @@ package dev.jta.processor;
 import dev.jta.core.AComponent;
 import dev.jta.core.ComponentMetadata;
 import dev.jta.core.ComponentMetadataIo;
+import dev.jta.core.Input;
 import dev.jta.core.JtaConfig;
 import dev.jta.core.Layout;
 import dev.jta.core.AllowAnonymous;
@@ -10,6 +11,10 @@ import dev.jta.core.RequiresRole;
 import dev.jta.core.Route;
 import dev.jta.core.Sse;
 import dev.jta.core.SelectorDerivation;
+import dev.jta.core.Use;
+import dev.jta.template.CssScoper;
+import dev.jta.template.DidYouMean;
+import dev.jta.template.TemplateTransformer;
 
 import javax.annotation.processing.AbstractProcessor;
 import javax.annotation.processing.Filer;
@@ -23,6 +28,7 @@ import javax.lang.model.element.ElementKind;
 import javax.lang.model.element.ExecutableElement;
 import javax.lang.model.element.Modifier;
 import javax.lang.model.element.TypeElement;
+import javax.lang.model.element.VariableElement;
 import javax.lang.model.type.MirroredTypeException;
 import javax.lang.model.type.TypeKind;
 import javax.lang.model.type.TypeMirror;
@@ -34,6 +40,8 @@ import java.io.IOException;
 import java.io.Writer;
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
@@ -73,6 +81,13 @@ public class JtaAnnotationProcessor extends AbstractProcessor {
 
     private final Map<String, String> selectorToFqn = new HashMap<>();
     private final List<ComponentMetadata> allMetadata = new ArrayList<>();
+
+    // selector canonico/explicito -> TypeElement, de TODO @AComponent/@Layout
+    // visto na rodada atual - indice de leitura para resolucao de tag de
+    // componente filho (ver #process). Nao e o mesmo mapa que selectorToFqn
+    // (que so registra durante o processamento real, para deteccao de
+    // colisao de selector explicito).
+    private final Map<String, TypeElement> moduleSelectorIndex = new LinkedHashMap<>();
 
     private Messager messager;
     private Filer filer;
@@ -141,6 +156,28 @@ public class JtaAnnotationProcessor extends AbstractProcessor {
 
     @Override
     public boolean process(Set<? extends TypeElement> annotations, RoundEnvironment roundEnv) {
+        // Indice de selector -> TypeElement de TODO @AComponent/@Layout visto
+        // NESTA rodada, construido ANTES de processar qualquer um deles -
+        // necessario porque a resolucao de tag de componente filho (secao
+        // "composicao de componentes") precisa enxergar um filho mesmo que
+        // ele seja processado DEPOIS do pai na iteracao de RoundEnvironment
+        // (a ordem de RoundEnvironment#getElementsAnnotatedWith nao e
+        // garantida). Nao registra colisao aqui (isso continua sendo
+        // responsabilidade de resolveSelector/selectorToFqn durante o
+        // processamento real) - e so um indice de LEITURA para resolucao
+        // de filho.
+        moduleSelectorIndex.clear();
+        for (Element element : roundEnv.getElementsAnnotatedWith(AComponent.class)) {
+            if (element.getKind() == ElementKind.CLASS) {
+                safely(element, () -> moduleSelectorIndex.putIfAbsent(peekSelector((TypeElement) element), (TypeElement) element));
+            }
+        }
+        for (Element element : roundEnv.getElementsAnnotatedWith(Layout.class)) {
+            if (element.getKind() == ElementKind.CLASS) {
+                safely(element, () -> moduleSelectorIndex.putIfAbsent(peekSelector((TypeElement) element), (TypeElement) element));
+            }
+        }
+
         for (Element element : roundEnv.getElementsAnnotatedWith(AComponent.class)) {
             if (element.getKind() != ElementKind.CLASS) {
                 messager.printMessage(Diagnostic.Kind.ERROR, "@AComponent so pode ser aplicado a classes", element);
@@ -158,9 +195,61 @@ public class JtaAnnotationProcessor extends AbstractProcessor {
         }
 
         if (roundEnv.processingOver() && !allMetadata.isEmpty()) {
+            detectNestingCycles();
             writeMetadataFile();
         }
         return true;
+    }
+
+    /**
+     * Deteccao de ciclo de aninhamento (A aninha B aninha A, direta ou
+     * indiretamente) via DFS sobre a aresta {@code fqn -> children}, so
+     * dentro dos componentes deste modulo ({@link #allMetadata}) - cruzar
+     * modulos e impossivel pela direcao normal de dependencia Maven (um
+     * filho de outro jar ja compilado nao pode ter sido compilado
+     * DEPENDENDO de algo que ainda nao existia). Roda uma unica vez, no
+     * fim do processing do modulo, depois de toda a metadata estar
+     * coletada.
+     */
+    private void detectNestingCycles() {
+        Map<String, List<String>> graph = new HashMap<>();
+        for (ComponentMetadata m : allMetadata) {
+            graph.put(m.fqn(), m.children());
+        }
+        Set<String> visited = new HashSet<>();
+        for (String node : graph.keySet()) {
+            if (visited.contains(node)) {
+                continue;
+            }
+            List<String> cyclePath = findCycle(node, graph, visited, new LinkedHashSet<>());
+            if (cyclePath != null) {
+                messager.printMessage(Diagnostic.Kind.ERROR,
+                        "[JTA] ciclo de aninhamento de componentes detectado: " + String.join(" -> ", cyclePath)
+                                + " - um componente nao pode (direta ou indiretamente) aninhar a si mesmo.");
+                return;
+            }
+        }
+    }
+
+    private List<String> findCycle(String node, Map<String, List<String>> graph, Set<String> visited, LinkedHashSet<String> stack) {
+        if (stack.contains(node)) {
+            List<String> path = new ArrayList<>(stack);
+            path.add(node);
+            return path;
+        }
+        if (visited.contains(node)) {
+            return null;
+        }
+        visited.add(node);
+        stack.add(node);
+        for (String child : graph.getOrDefault(node, List.of())) {
+            List<String> cycle = findCycle(child, graph, visited, stack);
+            if (cycle != null) {
+                return cycle;
+            }
+        }
+        stack.remove(node);
+        return null;
     }
 
     /**
@@ -206,9 +295,14 @@ public class JtaAnnotationProcessor extends AbstractProcessor {
         }
 
         FieldsAndMethods known = collectFieldsAndMethods(type);
+        if (known == null) {
+            return; // erro ja reportado (tipo de parametro de acao nao suportado)
+        }
 
+        Map<String, TemplateTransformer.ChildRef> knownChildTags = buildKnownChildTags(type);
         TemplateTransformer.Result result = TemplateTransformer.transform(
-                rawTemplate, selector, known.fields(), known.templateMethods(), known.actions(), known.nullableFields(), messageKeys());
+                rawTemplate, selector, known.fields(), known.templateMethods(), known.actionParams(),
+                known.nullableFields(), messageKeys(), knownChildTags);
         if (!reportErrorsIfAny(result, type)) {
             return;
         }
@@ -235,7 +329,7 @@ public class JtaAnnotationProcessor extends AbstractProcessor {
             }
         }
 
-        String generatedRelativePath = writeGeneratedJte(fqn, type, "@param " + fqn + " self\n" + result.generatedJte());
+        String generatedRelativePath = writeGeneratedJte(fqn, type, jteHeader(fqn) + result.generatedJte());
         if (generatedRelativePath == null) {
             return;
         }
@@ -263,7 +357,26 @@ public class JtaAnnotationProcessor extends AbstractProcessor {
         allMetadata.add(new ComponentMetadata(
                 fqn, selector, explicit, routePath, List.copyOf(known.actions()), generatedRelativePath,
                 scopedCss, false, layoutFqn, security.roles(), security.allowAnonymous(), ssePath, sseIntervalMillis,
-                List.copyOf(bindableFields)));
+                List.copyOf(bindableFields), known.actionParams(), List.copyOf(known.inputFields()),
+                List.copyOf(new LinkedHashSet<>(result.children()))));
+    }
+
+    /**
+     * Cabecalho uniforme e incondicional de TODO {@code .jte} gerado
+     * (componentes e layouts): sempre exatamente 2 {@code @param}, nunca
+     * condicional a ter ou nao filhos aninhados - detectar em compile-time
+     * se um componente aninha algum filho (ou se um filho de outro modulo
+     * ja compilado tambem aninha netos) exigiria ler o
+     * {@code components.json} dele via {@code Filer}/
+     * {@code StandardLocation.CLASS_PATH}, uma operacao fragil entre
+     * Maven/IDEs. Manter o parametro sempre presente elimina essa
+     * dependencia: toda chamada a {@code @template.X(...)} tem sempre
+     * exatamente os mesmos 2 argumentos, custe o que custar em builds sem
+     * nenhum aninhamento (um {@code @param} nunca usado no corpo do
+     * template nao tem custo de runtime).
+     */
+    private String jteHeader(String fqn) {
+        return "@param " + fqn + " self\n@param dev.jta.runtime.ComponentInvoker __jtaInvoker\n";
     }
 
     private record Security(List<String> roles, boolean allowAnonymous) {
@@ -344,9 +457,14 @@ public class JtaAnnotationProcessor extends AbstractProcessor {
         }
 
         FieldsAndMethods known = collectFieldsAndMethods(type);
+        if (known == null) {
+            return; // erro ja reportado (tipo de parametro de acao nao suportado)
+        }
 
+        Map<String, TemplateTransformer.ChildRef> knownChildTags = buildKnownChildTags(type);
         TemplateTransformer.Result result = TemplateTransformer.transform(
-                rawTemplate, selector, known.fields(), known.templateMethods(), known.actions(), known.nullableFields(), messageKeys());
+                rawTemplate, selector, known.fields(), known.templateMethods(), known.actionParams(),
+                known.nullableFields(), messageKeys(), knownChildTags);
         if (!reportErrorsIfAny(result, type)) {
             return;
         }
@@ -356,7 +474,7 @@ public class JtaAnnotationProcessor extends AbstractProcessor {
             return; // erro ja reportado (zero ou mais de um <router-outlet/>)
         }
 
-        String header = "@param " + fqn + " self\n@param String content\n";
+        String header = "@param " + fqn + " self\n@param String content\n@param dev.jta.runtime.ComponentInvoker __jtaInvoker\n";
         String generatedRelativePath = writeGeneratedJte(fqn, type, header + jteWithOutlet);
         if (generatedRelativePath == null) {
             return;
@@ -366,7 +484,8 @@ public class JtaAnnotationProcessor extends AbstractProcessor {
 
         allMetadata.add(new ComponentMetadata(
                 fqn, selector, false, null, List.copyOf(known.actions()), generatedRelativePath,
-                scopedCss, true, null, List.of(), false, null, 0, List.of()));
+                scopedCss, true, null, List.of(), false, null, 0, List.of(), known.actionParams(),
+                List.copyOf(known.inputFields()), List.copyOf(new LinkedHashSet<>(result.children()))));
     }
 
     private String resolveSelector(String explicitSelector, String fqn, TypeElement type) {
@@ -389,6 +508,80 @@ public class JtaAnnotationProcessor extends AbstractProcessor {
         String selector = SelectorDerivation.derive(fqn, stripDomainPrefix, separator);
         selectorToFqn.putIfAbsent(selector, fqn);
         return selector;
+    }
+
+    /**
+     * Computa o selector canonico/explicito de {@code type} SEM registrar
+     * nada em {@link #selectorToFqn} (sem efeito colateral de deteccao de
+     * colisao) - usado apenas para popular {@link #moduleSelectorIndex},
+     * um indice de leitura independente da ordem em que os componentes sao
+     * processados de verdade.
+     */
+    private String peekSelector(TypeElement type) {
+        String fqn = elementUtils.getBinaryName(type).toString();
+        AComponent component = type.getAnnotation(AComponent.class);
+        if (component != null && component.selector() != null && !component.selector().isBlank()) {
+            return component.selector();
+        }
+        boolean stripDomainPrefix = config().getBoolean("selector", "strip_domain_prefix", true);
+        String separator = config().getString("selector", "separator", "-");
+        return SelectorDerivation.derive(fqn, stripDomainPrefix, separator);
+    }
+
+    /**
+     * Resolve, para {@code consumerType}, o mapa completo de nomes de tag
+     * (aliases {@code @Use} + selectors canonicos/explicitos conhecidos no
+     * modulo) para a informacao do filho correspondente - ordem de
+     * precedencia: (1) {@code @Use} declarado na classe consumidora, (2)
+     * selector canonico/explicito ja conhecido no modulo. Colisao entre os
+     * dois e resolvida a favor do alias (aliases sao inseridos primeiro,
+     * {@code putIfAbsent} para os demais).
+     */
+    private Map<String, TemplateTransformer.ChildRef> buildKnownChildTags(TypeElement consumerType) {
+        Map<String, TemplateTransformer.ChildRef> result = new LinkedHashMap<>();
+        for (Use use : consumerType.getAnnotationsByType(Use.class)) {
+            String childFqn = extractUseTypeFqn(use);
+            TypeElement childType = elementUtils.getTypeElement(childFqn);
+            if (childType == null) {
+                continue; // classe referenciada nao encontrada - a tag simplesmente nao resolve, erro surge se usada
+            }
+            result.put(use.as(), toChildRef(childType));
+        }
+        for (Map.Entry<String, TypeElement> entry : moduleSelectorIndex.entrySet()) {
+            result.putIfAbsent(entry.getKey(), toChildRef(entry.getValue()));
+        }
+        return result;
+    }
+
+    private TemplateTransformer.ChildRef toChildRef(TypeElement childType) {
+        String childFqn = elementUtils.getBinaryName(childType).toString();
+        boolean isLayout = childType.getAnnotation(Layout.class) != null;
+        return new TemplateTransformer.ChildRef(childFqn, peekSelector(childType), collectInputFields(childType), isLayout);
+    }
+
+    private Set<String> collectInputFields(TypeElement type) {
+        Set<String> inputs = new LinkedHashSet<>();
+        for (Element member : type.getEnclosedElements()) {
+            if (member.getKind() == ElementKind.FIELD && member.getModifiers().contains(Modifier.PUBLIC)
+                    && !member.getModifiers().contains(Modifier.STATIC) && member.getAnnotation(Input.class) != null) {
+                inputs.add(member.getSimpleName().toString());
+            }
+        }
+        return inputs;
+    }
+
+    /**
+     * Extrai o FQN de {@code @Use(type = X.class, ...)} - mesma tecnica de
+     * {@link #extractLayoutFqn} ({@code Class<?>} de anotacao pode se
+     * referir a uma classe ainda nao compilada, entao o valor real vem de
+     * {@link MirroredTypeException}, nao do retorno direto).
+     */
+    private String extractUseTypeFqn(Use use) {
+        try {
+            return use.type().getCanonicalName();
+        } catch (MirroredTypeException e) {
+            return e.getTypeMirror().toString();
+        }
     }
 
     private String resolveTemplate(String template, String templateUrl, TypeElement type, String contextLabel) {
@@ -421,15 +614,24 @@ public class JtaAnnotationProcessor extends AbstractProcessor {
     }
 
     private record FieldsAndMethods(Set<String> fields, Set<String> templateMethods, Set<String> actions,
-                                     Set<String> nullableFields, Set<String> explicitlyBindableFields) {
+                                     Set<String> nullableFields, Set<String> explicitlyBindableFields,
+                                     Map<String, List<String>> actionParams, Set<String> inputFields) {
     }
 
+    /**
+     * @return {@code null} se algum metodo de acao declarar um parametro
+     *         de tipo nao suportado (erro ja reportado ao {@link Messager}
+     *         nesse caso - caller deve abortar o processamento do
+     *         componente).
+     */
     private FieldsAndMethods collectFieldsAndMethods(TypeElement type) {
         Set<String> fields = new LinkedHashSet<>();
         Set<String> templateMethods = new LinkedHashSet<>();
         Set<String> actions = new LinkedHashSet<>();
         Set<String> nullableFields = new LinkedHashSet<>();
         Set<String> explicitlyBindableFields = new LinkedHashSet<>();
+        Map<String, List<String>> actionParams = new LinkedHashMap<>();
+        boolean valid = true;
 
         for (Element member : type.getEnclosedElements()) {
             if (member.getModifiers().contains(Modifier.STATIC)) {
@@ -445,17 +647,58 @@ public class JtaAnnotationProcessor extends AbstractProcessor {
                 }
             } else if (member.getKind() == ElementKind.METHOD && member.getModifiers().contains(Modifier.PUBLIC)) {
                 ExecutableElement method = (ExecutableElement) member;
-                if (!method.getParameters().isEmpty()) {
-                    continue; // MVP: so metodos sem argumentos sao suportados no template
-                }
                 if (method.getReturnType().getKind() == TypeKind.VOID) {
+                    // acao - agora pode ter argumentos (secao "argumentos em
+                    // acoes"), restritos aos mesmos tipos simples que
+                    // ComponentInvoker ja sabe converter a partir de String.
+                    List<String> paramTypes = new ArrayList<>();
+                    for (VariableElement param : method.getParameters()) {
+                        String simpleType = simpleActionParamTypeName(param.asType());
+                        if (simpleType == null) {
+                            messager.printMessage(Diagnostic.Kind.ERROR,
+                                    "[JTA] tipo de parametro de acao nao suportado: '" + param.getSimpleName()
+                                            + "' (" + param.asType() + ") em " + method.getSimpleName() + "(...) - "
+                                            + "tipos aceitos: String, int/Integer, long/Long, double/Double, boolean/Boolean.",
+                                    method);
+                            valid = false;
+                        }
+                        paramTypes.add(simpleType);
+                    }
                     actions.add(method.getSimpleName().toString());
-                } else {
+                    actionParams.put(method.getSimpleName().toString(), paramTypes);
+                } else if (method.getParameters().isEmpty()) {
                     templateMethods.add(method.getSimpleName().toString());
                 }
+                // metodos publicos nao-void COM argumentos: nao sao nem
+                // acao nem metodo de template - ignorados no MVP, igual
+                // ao comportamento anterior a esta feature.
             }
         }
-        return new FieldsAndMethods(fields, templateMethods, actions, nullableFields, explicitlyBindableFields);
+        if (!valid) {
+            return null;
+        }
+        return new FieldsAndMethods(fields, templateMethods, actions, nullableFields, explicitlyBindableFields,
+                actionParams, collectInputFields(type));
+    }
+
+    /**
+     * Mapeia um {@link TypeMirror} para o nome simples do tipo, restrito
+     * aos tipos que {@code ComponentInvoker} ja sabe converter a partir de
+     * {@code String} - {@code null} se o tipo nao e suportado.
+     */
+    private String simpleActionParamTypeName(TypeMirror type) {
+        return switch (type.toString()) {
+            case "java.lang.String" -> "String";
+            case "int" -> "int";
+            case "java.lang.Integer" -> "Integer";
+            case "long" -> "long";
+            case "java.lang.Long" -> "Long";
+            case "double" -> "double";
+            case "java.lang.Double" -> "Double";
+            case "boolean" -> "boolean";
+            case "java.lang.Boolean" -> "Boolean";
+            default -> null;
+        };
     }
 
     /**

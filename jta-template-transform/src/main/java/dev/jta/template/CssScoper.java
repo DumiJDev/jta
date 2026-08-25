@@ -1,4 +1,4 @@
-package dev.jta.processor;
+package dev.jta.template;
 
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -18,7 +18,7 @@ import java.util.regex.Pattern;
  * precisam ser). Um parser CSS real fica para uma fase futura, mesma
  * decisao de escopo aplicada a TemplateTransformer.
  */
-final class CssScoper {
+public final class CssScoper {
 
     // "seletor1, seletor2 { declaracoes }" - nao entra em blocos @-rule
     private static final Pattern RULE = Pattern.compile("([^{}@]+)\\{([^{}]*)\\}");
@@ -26,7 +26,7 @@ final class CssScoper {
     private CssScoper() {
     }
 
-    static String scope(String rawCss, String selector) {
+    public static String scope(String rawCss, String selector) {
         if (rawCss == null || rawCss.isBlank()) {
             return "";
         }

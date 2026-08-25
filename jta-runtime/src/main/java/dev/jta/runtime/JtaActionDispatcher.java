@@ -7,6 +7,7 @@ import gg.jte.TemplateEngine;
 import gg.jte.output.StringOutput;
 import jakarta.validation.Validator;
 
+import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Set;
 
@@ -60,6 +61,17 @@ public final class JtaActionDispatcher {
             return new ActionResult.NotFound();
         }
 
+        // Camada 1 de defesa contra aridade incompativel (ver SECURITY.md,
+        // achado #1, generalizado para acoes com argumentos): a quantidade
+        // de __jtaArgN presentes na requisicao tem que bater EXATAMENTE
+        // com a aridade declarada em compile-time - nem a mais, nem a
+        // menos. Requisicao com aridade errada e tratada exatamente como
+        // acao inexistente (NotFound), nunca invocada.
+        String[] actionArgs = extractActionArgs(params, metadata.actionArity(action));
+        if (actionArgs == null) {
+            return new ActionResult.NotFound();
+        }
+
         Object instance;
         try {
             Class<?> type = Class.forName(metadata.fqn());
@@ -79,14 +91,39 @@ public final class JtaActionDispatcher {
         // dados invalidos nunca chegam ao codigo da acao.
         if (errors.isEmpty()) {
             try {
-                invoker.invokeAction(instance, action);
+                invoker.invokeAction(instance, action, actionArgs);
             } catch (Redirect redirect) {
                 return new ActionResult.Redirect(redirect.path());
             }
         }
 
         StringOutput output = new StringOutput();
-        templateEngine.render(metadata.generatedJteTemplate(), instance, output);
+        Map<String, Object> renderParams = new LinkedHashMap<>();
+        renderParams.put("self", instance);
+        renderParams.put("__jtaInvoker", invoker);
+        templateEngine.render(metadata.generatedJteTemplate(), renderParams, output);
         return new ActionResult.Rendered(output.toString());
+    }
+
+    /**
+     * Extrai {@code __jtaArg0..N-1} de {@code params}, na ordem, onde N e
+     * a aridade declarada da acao. Devolve {@code null} (aridade
+     * incompativel) se algum dos N esperados estiver ausente, ou se
+     * houver um {@code __jtaArgN} extra alem da aridade declarada -
+     * ambos os casos tratados como requisicao invalida.
+     */
+    private static String[] extractActionArgs(Map<String, String[]> params, int arity) {
+        if (params.containsKey("__jtaArg" + arity)) {
+            return null; // argumento extra alem da aridade declarada
+        }
+        String[] args = new String[arity];
+        for (int i = 0; i < arity; i++) {
+            String[] values = params.get("__jtaArg" + i);
+            if (values == null || values.length == 0) {
+                return null; // argumento esperado ausente
+            }
+            args[i] = values[0];
+        }
+        return args;
     }
 }

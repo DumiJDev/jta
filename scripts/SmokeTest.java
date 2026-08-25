@@ -1,5 +1,6 @@
 import dev.jta.core.*;
 import java.util.List;
+import java.util.Map;
 
 public class SmokeTest {
     static int passed = 0, failed = 0;
@@ -48,7 +49,10 @@ public class SmokeTest {
                 false,
                 "/live",
                 5000L,
-                List.of("valor", "titulo")
+                List.of("valor", "titulo"),
+                Map.of("remover", List.of("String")),
+                List.of("titulo"),
+                List.of("dev.jta.demo.Card")
         );
         String json = ComponentMetadataIo.toJson(List.of(original));
         List<ComponentMetadata> parsed = ComponentMetadataIo.fromJson(json);
@@ -71,11 +75,16 @@ public class SmokeTest {
         checkTrue("json round-trip sseIntervalMillis", roundTripped.sseIntervalMillis() == original.sseIntervalMillis());
         checkTrue("hasSse() true when ssePath present", roundTripped.hasSse());
         checkTrue("json round-trip bindableFields", roundTripped.bindableFields().equals(original.bindableFields()));
+        checkTrue("json round-trip actionParams", roundTripped.actionParams().equals(original.actionParams()));
+        checkTrue("json round-trip inputs", roundTripped.inputs().equals(original.inputs()));
+        checkTrue("json round-trip children", roundTripped.children().equals(original.children()));
+        checkTrue("actionArity() reads from actionParams", roundTripped.actionArity("remover") == 1);
+        checkTrue("actionArity() defaults to 0 for unknown action", roundTripped.actionArity("naoExiste") == 0);
 
         // component with no route (not a page) and no style
         ComponentMetadata partial = new ComponentMetadata(
                 "dev.jta.demo.Button", "jta-demo-button", true, null, List.of(), "dev/jta/demo/Button.jte", null,
-                false, null, List.of(), true, null, 0L, List.of());
+                false, null, List.of(), true, null, 0L, List.of(), Map.of(), List.of(), List.of());
         List<ComponentMetadata> parsedPartial = ComponentMetadataIo.fromJson(ComponentMetadataIo.toJson(List.of(partial)));
         checkTrue("null routePath round-trips as null", parsedPartial.get(0).routePath() == null);
         checkTrue("non-page isPage() is false", !parsedPartial.get(0).isPage());
@@ -83,14 +92,42 @@ public class SmokeTest {
         checkTrue("hasLayout() false when layoutFqn is null", !parsedPartial.get(0).hasLayout());
         checkTrue("isRestricted() false when requiredRoles is empty", !parsedPartial.get(0).isRestricted());
         checkTrue("json round-trip allowAnonymous true", parsedPartial.get(0).allowAnonymous());
+        checkTrue("actionArity() defaults to 0 when actionParams is empty", parsedPartial.get(0).actionArity("qualquer") == 0);
 
         // a layout itself
         ComponentMetadata layout = new ComponentMetadata(
                 "dev.jta.demo.SiteLayout", "dev-jta-demo-site-layout", false, null, List.of(),
-                "dev/jta/demo/SiteLayout.jte", null, true, null, List.of(), false, null, 0L, List.of());
+                "dev/jta/demo/SiteLayout.jte", null, true, null, List.of(), false, null, 0L, List.of(),
+                Map.of(), List.of(), List.of());
         List<ComponentMetadata> parsedLayout = ComponentMetadataIo.fromJson(ComponentMetadataIo.toJson(List.of(layout)));
         checkTrue("layout isLayout() true", parsedLayout.get(0).isLayout());
         checkTrue("layout isPage() false (no routePath)", !parsedLayout.get(0).isPage());
+
+        // um components.json ANTIGO (sem actionParams/inputs/children) precisa
+        // continuar carregando com os defaults - compatibilidade retroativa
+        // (JsonIo.readObject usa skipValue() para chaves desconhecidas, mas
+        // aqui testamos o caso inverso: chaves AUSENTES, nao desconhecidas).
+        String oldFormatJson = "[\n  {\n"
+                + "    \"fqn\": \"dev.jta.demo.Antigo\",\n"
+                + "    \"selector\": \"dev-jta-demo-antigo\",\n"
+                + "    \"explicitSelector\": false,\n"
+                + "    \"routePath\": null,\n"
+                + "    \"actions\": [],\n"
+                + "    \"generatedJteTemplate\": \"dev/jta/demo/Antigo.jte\",\n"
+                + "    \"scopedCss\": null,\n"
+                + "    \"isLayout\": false,\n"
+                + "    \"layoutFqn\": null,\n"
+                + "    \"requiredRoles\": [],\n"
+                + "    \"allowAnonymous\": false,\n"
+                + "    \"ssePath\": null,\n"
+                + "    \"sseIntervalMillis\": 0,\n"
+                + "    \"bindableFields\": []\n"
+                + "  }\n]\n";
+        List<ComponentMetadata> parsedOldFormat = ComponentMetadataIo.fromJson(oldFormatJson);
+        checkTrue("components.json antigo (sem actionParams/inputs/children) carrega com defaults",
+                parsedOldFormat.get(0).actionParams().isEmpty()
+                        && parsedOldFormat.get(0).inputs().isEmpty()
+                        && parsedOldFormat.get(0).children().isEmpty());
 
         // JtaConfig (jta.config.toml minimal parser)
         String toml = """

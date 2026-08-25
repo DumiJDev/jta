@@ -17,6 +17,7 @@
 
     <modules>
         <module>jta-core</module>
+        <module>jta-template-transform</module>
         <module>jta-processor</module>
         <module>jta-runtime</module>
         <module>jta-spring-boot-starter</module>

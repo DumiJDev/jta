@@ -114,6 +114,89 @@ class AlunoIntegrationTest {
     }
 
     @Test
+    void linhaDeAlunoRendedizaComoComponenteFilhoAninhadoComInputsDoPai() {
+        ResponseEntity<String> response = rest.getForEntity(baseUrl() + "/alunos", String.class);
+
+        assertThat(response.getBody())
+                // o pai continua com o proprio data-jta-component...
+                .contains("data-jta-component=\"dev-jta-demo-alunos-aluno-lista\"")
+                // ...e cada linha e agora o FILHO aninhado, com o SEU PROPRIO
+                // data-jta-component (selector canonico do filho, nunca o
+                // alias - "o selector real emitido e sempre o selector
+                // canonico do filho").
+                .contains("data-jta-component=\"aluno-linha\"")
+                // prova de property binding pai->filho: o nome/email do
+                // aluno (dado que so o PAI conhece via self.alunos()) chega
+                // renderizado dentro do filho.
+                .contains("Maria Silva")
+                // campo PROPRIO do filho (nao do pai) usado no teste de
+                // isolamento de hx-include abaixo.
+                .contains("<input type=\"hidden\" name=\"nome\" value=\"Maria Silva\"");
+    }
+
+    @Test
+    void hxIncludeDaAcaoDoPaiEEscopadoPorInstanciaExcluindoCampoDoFilho() {
+        ResponseEntity<String> response = rest.getForEntity(baseUrl() + "/alunos", String.class);
+        String body = response.getBody();
+
+        // a correcao real (ver TemplateTransformer#buildHxInclude): NAO mais
+        // "closest [data-jta-component]" (que varreria TAMBEM os campos do
+        // filho aninhado, incluindo o <input type="hidden" name="nome">
+        // proprio de AlunoLinha) - em vez disso, um seletor CSS puro
+        // ancorado num token unico por render (data-jta-scope), com dupla
+        // ancoragem para excluir qualquer campo que esteja dentro de uma
+        // SEGUNDA fronteira [data-jta-scope] (o filho).
+        assertThat(body).doesNotContain("hx-include=\"closest [data-jta-component]\"");
+        assertThat(body).containsPattern(
+                "hx-include=\"\\[data-jta-scope='\\d+'] :is\\(input,select,textarea\\)"
+                        + ":not\\(\\[data-jta-scope='\\d+'] \\[data-jta-scope] :is\\(input,select,textarea\\)\\)\"");
+    }
+
+    @Test
+    void removerAlunoNaoVazaCampoDoFilhoEExcluiDeVerdade() {
+        // cria um aluno isolado (sem matricula/nota referenciando - FK),
+        // so para este teste, evitando qualquer dependencia da ordem de
+        // execucao com os outros testes desta classe.
+        MultiValueMap<String, String> criarForm = new LinkedMultiValueMap<>();
+        criarForm.add("nome", "Removivel Teste");
+        criarForm.add("email", "removivel.teste@escola.exemplo");
+        criarForm.add("nascimento", "2011-01-01");
+        ResponseEntity<String> criado = postAction("dev.jta.demo.alunos.AlunoNovo", "criar", criarForm);
+        String redirectTo = criado.getHeaders().getFirst("HX-Redirect");
+        assertThat(redirectTo).isNotNull().startsWith("/alunos/");
+        String novoId = redirectTo.substring("/alunos/".length());
+
+        ResponseEntity<String> antesDeRemover = rest.getForEntity(baseUrl() + "/alunos", String.class);
+        assertThat(antesDeRemover.getBody()).contains("Removivel Teste");
+
+        // remove via o MESMO endpoint de acao que o botao (click)="remover(aluno.id())"
+        // do template de AlunoLista gera - __jtaArg0 e o id resolvido por
+        // POSICAO (nao por nome de parametro), exatamente como o
+        // ComponentInvoker/JtaActionDispatcher fazem em producao.
+        MultiValueMap<String, String> removerForm = new LinkedMultiValueMap<>();
+        removerForm.add("__jtaArg0", novoId);
+        ResponseEntity<String> response = postAction("dev.jta.demo.alunos.AlunoLista", "remover", removerForm);
+
+        assertThat(response.getStatusCode().is2xxSuccessful()).isTrue();
+        assertThat(response.getBody()).doesNotContain("Removivel Teste");
+
+        ResponseEntity<String> depoisDeRemover = rest.getForEntity(baseUrl() + "/alunos", String.class);
+        assertThat(depoisDeRemover.getBody()).doesNotContain("Removivel Teste");
+    }
+
+    @Test
+    void acaoComAridadeErradaEeTratadaComoNaoEncontrada() {
+        // camada 1 de defesa (JtaActionDispatcher): 'remover' declara
+        // aridade 1 - invocar sem nenhum __jtaArgN (aridade 0) tem que ser
+        // rejeitado exatamente como uma acao inexistente, nunca invocado
+        // com um id ausente/nulo.
+        MultiValueMap<String, String> semArgumento = new LinkedMultiValueMap<>();
+        ResponseEntity<String> response = postAction("dev.jta.demo.alunos.AlunoLista", "remover", semArgumento);
+
+        assertThat(response.getStatusCode().value()).isEqualTo(404);
+    }
+
+    @Test
     void duasRequisicoesConcorrentesNaoVazamEstadoEntreSi() {
         // se AlunoDetalhe estivesse registrado sem @Scope("prototype"), a
         // segunda chamada poderia devolver o aluno da primeira (mesma

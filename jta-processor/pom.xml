@@ -40,6 +40,15 @@
             <version>${project.version}</version>
         </dependency>
         <dependency>
+            <!-- TemplateTransformer/CssScoper/DidYouMean - transformacao pura
+                 de String/regex, sem dependencia de javax.lang.model/Filer/
+                 Messager. Vive num modulo irmao para ser reutilizavel fora de
+                 annotation processing (ex: dev-loop com hot reload). -->
+            <groupId>dev.jta</groupId>
+            <artifactId>jta-template-transform</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+        <dependency>
             <groupId>org.junit.jupiter</groupId>
             <artifactId>junit-jupiter</artifactId>
             <scope>test</scope>

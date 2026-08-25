@@ -45,6 +45,57 @@ public final class ComponentInvoker {
     }
 
     /**
+     * Instancia um FILHO aninhado (composicao de componentes) e popula os
+     * campos {@code @Input} indicados diretamente via reflection, SEM
+     * coercao de tipo - os valores em {@code inputs} ja chegam tipados
+     * (avaliados como expressao Java real no processo do PAI, nunca como
+     * {@code String} vinda de uma requisicao HTTP). Um mismatch de tipo
+     * aqui vira {@link IllegalArgumentException} de {@code Field.set} -
+     * gap aceito e documentado nesta fase (conversao de tipos entre
+     * pai/filho fica para uma frente separada), nao um sistema de
+     * coercao construido as pressas.
+     *
+     * <p>Chamado pelo {@code .jte} gerado do PAI, nunca diretamente por
+     * codigo de aplicacao - a validacao de que {@code inputs} so contem
+     * chaves que o processor ja confirmou serem campos {@code @Input}
+     * legitimos do filho aconteceu em compile-time; aqui, defesa em
+     * profundidade extra: um campo existente mas SEM {@code @Input} e
+     * ignorado silenciosamente em vez de setado, mesmo que o nome bata.
+     */
+    public Object instantiateChild(Class<?> type, Map<String, Object> inputs) {
+        Object instance = factory.instantiate(type);
+        for (Map.Entry<String, Object> entry : inputs.entrySet()) {
+            setInputField(instance, entry.getKey(), entry.getValue());
+        }
+        callInitIfPresent(instance);
+        return instance;
+    }
+
+    private void setInputField(Object instance, String name, Object value) {
+        Field field;
+        try {
+            field = instance.getClass().getField(name);
+        } catch (NoSuchFieldException e) {
+            throw new IllegalStateException("Campo de input '" + name + "' nao encontrado em "
+                    + instance.getClass().getName() + " - metadata de componente desatualizada?", e);
+        }
+        if (!field.isAnnotationPresent(dev.jta.core.Input.class)) {
+            // defesa em profundidade: o processor ja validou isto em
+            // compile-time contra o codigo-fonte real do filho; se por
+            // algum motivo (jar desatualizado, etc.) o campo resolvido em
+            // runtime nao e mais @Input, nao setamos - fail-closed, igual
+            // ao espirito de bindableFields para requisicoes HTTP.
+            return;
+        }
+        try {
+            field.set(instance, value);
+        } catch (IllegalAccessException e) {
+            throw new IllegalStateException("Nao foi possivel popular o campo @Input '" + name + "' em "
+                    + instance.getClass().getName(), e);
+        }
+    }
+
+    /**
      * Popula campos a partir de query params/form data - restrito a
      * {@code bindableFields} (ver SECURITY.md, achado #5: antes desta
      * correcao, TODO campo publico era bindavel so por ser publico,
@@ -98,24 +149,47 @@ public final class ComponentInvoker {
 
     private void setField(Object instance, Field field, String rawValue) {
         try {
-            Class<?> type = field.getType();
-            if (type == String.class) {
-                field.set(instance, rawValue);
-            } else if (type == int.class || type == Integer.class) {
-                field.set(instance, Integer.parseInt(rawValue));
-            } else if (type == long.class || type == Long.class) {
-                field.set(instance, Long.parseLong(rawValue));
-            } else if (type == double.class || type == Double.class) {
-                field.set(instance, Double.parseDouble(rawValue));
-            } else if (type == boolean.class || type == Boolean.class) {
-                field.set(instance, Boolean.parseBoolean(rawValue));
+            Object converted = convert(rawValue, field.getType());
+            if (converted != null) {
+                field.set(instance, converted);
             }
-            // outros tipos: ignorado silenciosamente no MVP - o componente
-            // mantem o valor default do campo. Documentado como limitacao.
+            // tipo nao suportado (convert devolveu null): ignorado
+            // silenciosamente no MVP - o componente mantem o valor default
+            // do campo. Documentado como limitacao.
         } catch (IllegalAccessException | NumberFormatException e) {
             throw new IllegalArgumentException("Nao foi possivel converter '" + rawValue + "' para o campo '"
                     + field.getName() + "' (" + field.getType().getSimpleName() + ") em " + instance.getClass().getName(), e);
         }
+    }
+
+    /**
+     * Coercao de {@code String} (sempre a forma em que um valor chega de
+     * uma requisicao HTTP - query param, path variable, form data, ou
+     * argumento posicional de acao {@code __jtaArgN}) para um dos tipos
+     * simples suportados. Extraido de {@link #setField} para ser
+     * reutilizado tambem por {@link #invokeAction(Object, String, String[])}
+     * - as duas vias (campo de estado, argumento de acao) NUNCA devem
+     * divergir silenciosamente na lista de tipos suportados.
+     *
+     * @return o valor convertido, ou {@code null} se {@code targetType}
+     *         nao e um dos tipos suportados (chamador decide o que fazer:
+     *         {@link #setField} ignora silenciosamente, {@link #invokeAction}
+     *         nunca deveria chegar aqui com um tipo nao suportado porque o
+     *         processor ja rejeita isso em compile-time).
+     */
+    private static Object convert(String rawValue, Class<?> targetType) {
+        if (targetType == String.class) {
+            return rawValue;
+        } else if (targetType == int.class || targetType == Integer.class) {
+            return Integer.parseInt(rawValue);
+        } else if (targetType == long.class || targetType == Long.class) {
+            return Long.parseLong(rawValue);
+        } else if (targetType == double.class || targetType == Double.class) {
+            return Double.parseDouble(rawValue);
+        } else if (targetType == boolean.class || targetType == Boolean.class) {
+            return Boolean.parseBoolean(rawValue);
+        }
+        return null;
     }
 
     /**
@@ -135,11 +209,36 @@ public final class ComponentInvoker {
      * reflection ao conjunto de acoes reais).
      */
     public void invokeAction(Object instance, String actionName) {
-        Method method = findPublicVoidNoArgMethod(instance.getClass(), actionName)
+        invokeAction(instance, actionName, new String[0]);
+    }
+
+    /**
+     * Sobrecarga com argumentos posicionais (query params
+     * {@code __jtaArgN}, ja extraidos e ordenados pelo chamador - ver
+     * {@code JtaActionDispatcher}). Cada argumento bruto e convertido via
+     * {@link #convert} para o tipo do parametro correspondente na
+     * assinatura real do metodo (resolvida por posicao, nunca por nome -
+     * nomes de parametro so sobrevivem no bytecode com {@code -parameters},
+     * nao garantido).
+     *
+     * <p>Mesma defesa em profundidade de sempre: so resolve metodos
+     * {@code public void} com a aridade EXATA recebida - a checagem
+     * primaria (aridade declarada bate com a quantidade de
+     * {@code __jtaArgN} presentes na requisicao) e do chamador, mas esta
+     * classe nunca confia apenas nisso (ver SECURITY.md, achado #1).
+     */
+    public void invokeAction(Object instance, String actionName, String[] rawArgs) {
+        Method method = findPublicVoidMethod(instance.getClass(), actionName, rawArgs.length)
                 .orElseThrow(() -> new IllegalArgumentException(
-                        "Acao '" + actionName + "' nao encontrada em " + instance.getClass().getName()));
+                        "Acao '" + actionName + "' (aridade " + rawArgs.length + ") nao encontrada em "
+                                + instance.getClass().getName()));
+        Class<?>[] paramTypes = method.getParameterTypes();
+        Object[] args = new Object[rawArgs.length];
+        for (int i = 0; i < rawArgs.length; i++) {
+            args[i] = convert(rawArgs[i], paramTypes[i]);
+        }
         try {
-            method.invoke(instance);
+            method.invoke(instance, args);
         } catch (InvocationTargetException e) {
             if (e.getCause() instanceof dev.jta.core.Redirect redirect) {
                 throw redirect;
@@ -164,7 +263,7 @@ public final class ComponentInvoker {
      * (seguro de chamar mais de uma vez).
      */
     public void callInitIfPresent(Object instance) {
-        findPublicVoidNoArgMethod(instance.getClass(), "init")
+        findPublicVoidMethod(instance.getClass(), "init", 0)
                 .ifPresent(m -> {
                     try {
                         m.invoke(instance);
@@ -184,9 +283,9 @@ public final class ComponentInvoker {
      * chamador nunca invocar {@link #invokeAction} com um nome que nao
      * esteja em {@code metadata.actions()}.
      */
-    private java.util.Optional<Method> findPublicVoidNoArgMethod(Class<?> type, String name) {
+    private java.util.Optional<Method> findPublicVoidMethod(Class<?> type, String name, int arity) {
         for (Method method : type.getMethods()) {
-            if (method.getName().equals(name) && method.getParameterCount() == 0 && method.getReturnType() == void.class) {
+            if (method.getName().equals(name) && method.getParameterCount() == arity && method.getReturnType() == void.class) {
                 return java.util.Optional.of(method);
             }
         }

@@ -1,20 +1,20 @@
-package dev.jta.processor;
+package dev.jta.template;
 
 import java.util.Set;
 
 /**
  * Sugestao "voce quis dizer X?" via distancia de edicao, compartilhada
  * entre {@link TemplateTransformer} (bindings de template) e
- * {@link JtaAnnotationProcessor} (parametros de rota) - parte do
- * compromisso de DX do documento original: erros de compilacao devem ser
- * acionaveis, nao so apontar o problema.
+ * {@code JtaAnnotationProcessor} (jta-processor, para parametros de rota) -
+ * parte do compromisso de DX do documento original: erros de compilacao
+ * devem ser acionaveis, nao so apontar o problema.
  */
-final class DidYouMean {
+public final class DidYouMean {
 
     private DidYouMean() {
     }
 
-    static String suggest(String reference, Set<String> candidates) {
+    public static String suggest(String reference, Set<String> candidates) {
         String best = null;
         int bestDistance = Integer.MAX_VALUE;
         for (String candidate : candidates) {

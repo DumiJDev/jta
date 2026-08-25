@@ -1,0 +1,47 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <parent>
+        <groupId>dev.jta</groupId>
+        <artifactId>jta-parent</artifactId>
+        <version>0.1.0-SNAPSHOT</version>
+    </parent>
+
+    <artifactId>jta-template-transform</artifactId>
+    <packaging>jar</packaging>
+    <name>jta-template-transform</name>
+    <description>
+        Transformacao pura de template .jta/.css para .jte/CSS escopado
+        (TemplateTransformer, CssScoper) e a heuristica "voce quis dizer X?"
+        (DidYouMean). Extraido de jta-processor para ser reutilizavel em dois
+        contextos que nao sao annotation processing: um dev-loop com hot
+        reload (que precisa re-rodar a mesma transformacao em runtime, sem
+        recompilar) e testes diretos da transformacao sem o peso de um
+        harness de compile-testing.
+
+        Zero dependencias, mesma filosofia de jta-core: estas classes so
+        manipulam String/regex, nunca tocam javax.lang.model/Filer/Messager
+        - essa fronteira e o que torna a extracao segura.
+    </description>
+
+    <dependencies>
+        <dependency>
+            <groupId>org.junit.jupiter</groupId>
+            <artifactId>junit-jupiter</artifactId>
+            <scope>test</scope>
+        </dependency>
+    </dependencies>
+
+    <build>
+        <plugins>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-surefire-plugin</artifactId>
+                <version>3.3.1</version>
+            </plugin>
+        </plugins>
+    </build>
+</project>

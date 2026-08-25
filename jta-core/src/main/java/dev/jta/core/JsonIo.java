@@ -1,7 +1,9 @@
 package dev.jta.core;
 
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 
 /**
  * Serializacao/deserializacao JSON minima, propria, usada apenas para o
@@ -47,7 +49,10 @@ final class JsonIo {
             sb.append("    \"allowAnonymous\": ").append(m.allowAnonymous()).append(",\n");
             sb.append("    \"ssePath\": ").append(quoteNullable(m.ssePath())).append(",\n");
             sb.append("    \"sseIntervalMillis\": ").append(m.sseIntervalMillis()).append(",\n");
-            sb.append("    \"bindableFields\": ").append(writeStringArray(m.bindableFields())).append("\n");
+            sb.append("    \"bindableFields\": ").append(writeStringArray(m.bindableFields())).append(",\n");
+            sb.append("    \"actionParams\": ").append(writeStringListMap(m.actionParams())).append(",\n");
+            sb.append("    \"inputs\": ").append(writeStringArray(m.inputs())).append(",\n");
+            sb.append("    \"children\": ").append(writeStringArray(m.children())).append("\n");
             sb.append("  }");
             if (i < items.size() - 1) {
                 sb.append(",");
@@ -91,6 +96,9 @@ final class JsonIo {
         List<String> bindableFields = List.of();
         List<String> actions = List.of();
         List<String> requiredRoles = List.of();
+        Map<String, List<String>> actionParams = Map.of();
+        List<String> inputs = List.of();
+        List<String> children = List.of();
 
         c.skipWhitespace();
         while (c.peek() != '}') {
@@ -114,6 +122,9 @@ final class JsonIo {
                 case "ssePath" -> ssePath = c.readNullableString();
                 case "sseIntervalMillis" -> sseIntervalMillis = c.readLong();
                 case "bindableFields" -> bindableFields = c.readStringArray();
+                case "actionParams" -> actionParams = c.readStringListMap();
+                case "inputs" -> inputs = c.readStringArray();
+                case "children" -> children = c.readStringArray();
                 default -> c.skipValue();
             }
             c.skipWhitespace();
@@ -124,7 +135,32 @@ final class JsonIo {
         }
         c.expect('}');
         return new ComponentMetadata(fqn, selector, explicitSelector, routePath, actions, template, scopedCss,
-                isLayout, layoutFqn, requiredRoles, allowAnonymous, ssePath, sseIntervalMillis, bindableFields);
+                isLayout, layoutFqn, requiredRoles, allowAnonymous, ssePath, sseIntervalMillis, bindableFields,
+                actionParams, inputs, children);
+    }
+
+    /**
+     * Serializa {@code Map<String, List<String>>} - primeira vez que o
+     * formato lida com um valor que e ele mesmo um mapa de listas. Mesmo
+     * estilo minimalista do resto deste arquivo: sem generalizar para um
+     * parser JSON de proposito geral, so o suficiente para este shape
+     * especifico (chave string, valor array-de-string).
+     */
+    private static String writeStringListMap(Map<String, List<String>> value) {
+        if (value == null || value.isEmpty()) {
+            return "{}";
+        }
+        StringBuilder sb = new StringBuilder("{");
+        int i = 0;
+        for (Map.Entry<String, List<String>> entry : value.entrySet()) {
+            if (i > 0) {
+                sb.append(", ");
+            }
+            sb.append(quote(entry.getKey())).append(": ").append(writeStringArray(entry.getValue()));
+            i++;
+        }
+        sb.append("}");
+        return sb.toString();
     }
 
     private static String writeStringArray(List<String> values) {
@@ -281,6 +317,8 @@ final class JsonIo {
                 readString();
             } else if (ch == '[') {
                 readStringArray();
+            } else if (ch == '{') {
+                readStringListMap();
             } else if (src.startsWith("null", pos)) {
                 pos += 4;
             } else if (src.startsWith("true", pos)) {
@@ -292,6 +330,32 @@ final class JsonIo {
             } else {
                 throw new IllegalStateException("Valor JSON nao suportado na posicao " + pos);
             }
+        }
+
+        Map<String, List<String>> readStringListMap() {
+            Map<String, List<String>> result = new LinkedHashMap<>();
+            expect('{');
+            skipWhitespace();
+            if (peek() == '}') {
+                pos++;
+                return result;
+            }
+            while (true) {
+                skipWhitespace();
+                String key = readString();
+                skipWhitespace();
+                expect(':');
+                skipWhitespace();
+                result.put(key, readStringArray());
+                skipWhitespace();
+                if (peek() == ',') {
+                    pos++;
+                    continue;
+                }
+                break;
+            }
+            expect('}');
+            return result;
         }
     }
 }
