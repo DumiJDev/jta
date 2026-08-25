@@ -9,6 +9,7 @@ import dev.jta.runtime.ActionResult;
 import dev.jta.runtime.ComponentInvoker;
 import dev.jta.runtime.CurrentUser;
 import dev.jta.runtime.JtaActionDispatcher;
+import dev.jta.runtime.JtaErrorPageRenderer;
 import dev.jta.runtime.JtaPageDispatcher;
 import dev.jta.runtime.PageResult;
 import dev.jta.runtime.csrf.CsrfRequest;
@@ -17,6 +18,7 @@ import dev.jta.runtime.csrf.CsrfTokenStoreFactory;
 import dev.jta.runtime.session.InMemorySessionStore;
 import dev.jta.runtime.session.JtaSession;
 import dev.jta.runtime.session.SessionStore;
+import dev.jta.runtime.upload.UploadedFile;
 import gg.jte.TemplateEngine;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -87,6 +89,7 @@ public final class JtaHttpServer {
             ComponentInvoker invoker = new ComponentInvoker(config.componentFactory());
             JtaPageDispatcher pageDispatcher = new JtaPageDispatcher(registry, invoker, templateEngine, jtaConfig, csrfTokenStore);
             JtaActionDispatcher actionDispatcher = new JtaActionDispatcher(registry, invoker, templateEngine, config.validator(), csrfTokenStore);
+            JtaErrorPageRenderer errorPageRenderer = new JtaErrorPageRenderer(registry, invoker, templateEngine, jtaConfig);
 
             List<PageRoute> pageRoutes = new ArrayList<>();
             for (ComponentMetadata page : registry.pages()) {
@@ -99,8 +102,8 @@ public final class JtaHttpServer {
 
             HttpServer server = HttpServer.create(new InetSocketAddress(port), 0);
             server.setExecutor(Executors.newVirtualThreadPerTaskExecutor());
-            server.createContext(ACTION_PREFIX, exchange -> handleAction(exchange, actionDispatcher, csrfTokenStore, sessionStore, jtaConfig, config));
-            server.createContext("/", exchange -> handlePage(exchange, pageRoutes, pageDispatcher, sessionStore, jtaConfig, config));
+            server.createContext(ACTION_PREFIX, exchange -> handleAction(exchange, actionDispatcher, csrfTokenStore, sessionStore, jtaConfig, config, errorPageRenderer));
+            server.createContext("/", exchange -> handlePage(exchange, pageRoutes, pageDispatcher, sessionStore, jtaConfig, config, errorPageRenderer));
             return new JtaHttpServer(server);
         } catch (IOException e) {
             throw new UncheckedIOException("Falha ao criar o HttpServer na porta " + port, e);
@@ -123,7 +126,8 @@ public final class JtaHttpServer {
     }
 
     private static void handlePage(HttpExchange exchange, List<PageRoute> pageRoutes, JtaPageDispatcher dispatcher,
-                                    SessionStore sessionStore, JtaConfig jtaConfig, JtaStandaloneConfig config) throws IOException {
+                                    SessionStore sessionStore, JtaConfig jtaConfig, JtaStandaloneConfig config,
+                                    JtaErrorPageRenderer errorPageRenderer) throws IOException {
         if (!"GET".equals(exchange.getRequestMethod())) {
             sendResponse(exchange, 405, "");
             return;
@@ -153,12 +157,12 @@ public final class JtaHttpServer {
                 // lancada por um metodo de template ou por um servico do dev
                 // escapava daqui sem log nenhum deste lado.
                 LOG.error("Falha interna ao renderizar a pagina '{}'", route.metadata().selector(), e);
-                sendResponse(exchange, 500, "");
+                sendErrorResponse(exchange, 500, path, errorPageRenderer);
                 return;
             }
 
             if (result instanceof PageResult.Forbidden) {
-                sendResponse(exchange, 403, "");
+                sendErrorResponse(exchange, 403, path, errorPageRenderer);
                 return;
             }
             PageResult.Rendered rendered = (PageResult.Rendered) result;
@@ -171,20 +175,22 @@ public final class JtaHttpServer {
             sendResponse(exchange, 200, rendered.html());
             return;
         }
-        sendResponse(exchange, 404, "");
+        sendErrorResponse(exchange, 404, path, errorPageRenderer);
     }
 
     private static void handleAction(HttpExchange exchange, JtaActionDispatcher dispatcher, CsrfTokenStore csrfTokenStore,
-                                      SessionStore sessionStore, JtaConfig jtaConfig, JtaStandaloneConfig config)
+                                      SessionStore sessionStore, JtaConfig jtaConfig, JtaStandaloneConfig config,
+                                      JtaErrorPageRenderer errorPageRenderer)
             throws IOException {
+        String path = exchange.getRequestURI().getPath();
         if (!"POST".equals(exchange.getRequestMethod())) {
             sendResponse(exchange, 405, "");
             return;
         }
 
-        String remainder = exchange.getRequestURI().getPath().substring(ACTION_PREFIX.length());
+        String remainder = path.substring(ACTION_PREFIX.length());
         if (remainder.isEmpty() || remainder.contains("/")) {
-            sendResponse(exchange, 404, "");
+            sendErrorResponse(exchange, 404, path, errorPageRenderer);
             return;
         }
         String selector = remainder;
@@ -192,7 +198,8 @@ public final class JtaHttpServer {
         Map<String, String[]> params = new HashMap<>(parseQueryString(exchange.getRequestURI().getRawQuery()));
         String action = firstValue(params, "action");
         params.remove("action");
-        params.putAll(parseFormBody(exchange));
+        RequestBody requestBody = parseRequestBody(exchange);
+        params.putAll(requestBody.params());
 
         if (action == null || action.isBlank()) {
             sendResponse(exchange, 400, "");
@@ -207,7 +214,7 @@ public final class JtaHttpServer {
 
         ActionResult result;
         try {
-            result = dispatcher.dispatch(selector, action, params, user, session, csrf);
+            result = dispatcher.dispatch(selector, action, params, user, session, csrf, requestBody.uploads());
         } catch (IllegalArgumentException e) {
             LOG.warn("Requisicao JTA invalida na acao '{}' de '{}'",
                     sanitizeForLog(action), sanitizeForLog(selector), e);
@@ -216,18 +223,18 @@ public final class JtaHttpServer {
         } catch (RuntimeException e) {
             LOG.error("Falha interna ao executar a acao '{}' de '{}'",
                     sanitizeForLog(action), sanitizeForLog(selector), e);
-            sendResponse(exchange, 500, "");
+            sendErrorResponse(exchange, 500, path, errorPageRenderer);
             return;
         }
 
         if (result instanceof ActionResult.Forbidden) {
-            sendResponse(exchange, 403, "");
+            sendErrorResponse(exchange, 403, path, errorPageRenderer);
             return;
         }
         if (result instanceof ActionResult.NotFound) {
             // ver SECURITY.md, achado #1 - mesma logica de log dos outros adaptadores.
             LOG.warn("Tentativa de invocar acao nao declarada '{}' em '{}'", sanitizeForLog(action), selector);
-            sendResponse(exchange, 404, "");
+            sendErrorResponse(exchange, 404, path, errorPageRenderer);
             return;
         }
         if (result instanceof ActionResult.Redirect redirect) {
@@ -304,13 +311,52 @@ public final class JtaHttpServer {
         return parseEncodedForm(rawQuery);
     }
 
-    private static Map<String, String[]> parseFormBody(HttpExchange exchange) throws IOException {
+    private record RequestBody(Map<String, String[]> params, Map<String, UploadedFile> uploads) {
+        static final RequestBody EMPTY = new RequestBody(Map.of(), Map.of());
+    }
+
+    /**
+     * Le o corpo da requisicao UMA VEZ e decide como interpreta-lo pelo
+     * {@code Content-Type}: {@code application/x-www-form-urlencoded}
+     * (comportamento pre-existente) ou {@code multipart/form-data} (ver
+     * {@link MultipartParser} - com.sun.net.httpserver nao tem parsing de
+     * multipart embutido, ao contrario dos outros 3 adaptadores). Partes
+     * sem {@code filename} (campos de texto comuns enviados via
+     * multipart) viram entradas normais de {@code params}; partes COM
+     * {@code filename} viram {@link UploadedFile}, indexadas pelo nome do
+     * campo (ver {@code ComponentMetadata#uploadFields}).
+     */
+    private static RequestBody parseRequestBody(HttpExchange exchange) throws IOException {
         String contentType = exchange.getRequestHeaders().getFirst("Content-Type");
-        if (contentType == null || !contentType.toLowerCase().startsWith("application/x-www-form-urlencoded")) {
-            return Map.of();
+        if (contentType == null) {
+            return RequestBody.EMPTY;
         }
-        String body = new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8);
-        return parseEncodedForm(body);
+        String lowerContentType = contentType.toLowerCase();
+        if (lowerContentType.startsWith("application/x-www-form-urlencoded")) {
+            String body = new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8);
+            return new RequestBody(parseEncodedForm(body), Map.of());
+        }
+        if (lowerContentType.startsWith("multipart/form-data")) {
+            String boundary = MultipartParser.extractBoundary(contentType);
+            if (boundary == null) {
+                return RequestBody.EMPTY;
+            }
+            byte[] body = exchange.getRequestBody().readAllBytes();
+            Map<String, List<String>> textFields = new HashMap<>();
+            Map<String, UploadedFile> uploads = new HashMap<>();
+            for (MultipartParser.Part part : MultipartParser.parse(body, boundary)) {
+                if (part.isFile()) {
+                    uploads.put(part.name(), new UploadedFile(part.filename(), part.contentType(), part.content()));
+                } else {
+                    textFields.computeIfAbsent(part.name(), k -> new ArrayList<>())
+                            .add(new String(part.content(), StandardCharsets.UTF_8));
+                }
+            }
+            Map<String, String[]> params = new HashMap<>();
+            textFields.forEach((key, values) -> params.put(key, values.toArray(new String[0])));
+            return new RequestBody(params, uploads);
+        }
+        return RequestBody.EMPTY;
     }
 
     private static Map<String, String[]> parseEncodedForm(String encoded) {
@@ -329,6 +375,19 @@ public final class JtaHttpServer {
         Map<String, String[]> result = new HashMap<>();
         collected.forEach((key, values) -> result.put(key, values.toArray(new String[0])));
         return result;
+    }
+
+    /**
+     * Tenta renderizar o componente {@code @ErrorPage} registrado para
+     * {@code status} (ver {@link JtaErrorPageRenderer}) antes de devolver a
+     * resposta - sem nenhum componente registrado, cai no comportamento
+     * pre-existente (corpo vazio), mesmo padrao dos outros adaptadores
+     * (Spring: {@code JtaExceptionHandler}/{@code JtaRouteRegistrar}).
+     */
+    private static void sendErrorResponse(HttpExchange exchange, int status, String path,
+                                           JtaErrorPageRenderer errorPageRenderer) throws IOException {
+        String html = errorPageRenderer.render(status, path, null).orElse("");
+        sendResponse(exchange, status, html);
     }
 
     private static void sendResponse(HttpExchange exchange, int status, String html) throws IOException {

@@ -64,7 +64,8 @@ class ComponentRegistryOrderingTest {
                 fqn, selector, false, routePath,
                 List.of(), selector + ".jte", null, false, null,
                 List.of(), false, null, 0L, List.of(),
-                Map.of(), List.of(), List.of(), false);
+                Map.of(), List.of(), List.of(), false,
+                false, false, 0, List.of());
     }
 
     /**

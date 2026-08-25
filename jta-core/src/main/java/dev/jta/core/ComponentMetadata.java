@@ -64,6 +64,23 @@ import java.util.Map;
  * @param csrfExempt      true se o componente foi anotado com {@code @CsrfExempt} -
  *                        {@code JtaActionDispatcher} pula a verificacao de
  *                        CSRF para as acoes deste componente quando true.
+ * @param hasSlot         true se o template deste componente declara um
+ *                        {@code <slot/>} (ou {@code <slot>fallback</slot>}) -
+ *                        usado pelo processor para, ao compilar um CONSUMIDOR
+ *                        deste componente, avisar quando conteudo e passado
+ *                        via {@code <tag>...</tag>} mas o filho nao declara
+ *                        nenhum slot para recebe-lo.
+ * @param isErrorPage     true se o componente foi anotado com {@code @ErrorPage} -
+ *                        elegivel a ser registrado como o renderizador de um
+ *                        status HTTP de erro (ver {@code ComponentRegistry#errorPage}).
+ * @param errorPageStatus status HTTP que este componente renderiza quando
+ *                        {@code isErrorPage} e true (ex: 404, 500, 403);
+ *                        {@code 0} quando {@code isErrorPage} e false.
+ * @param uploadFields    nomes dos campos publicos do tipo
+ *                        {@code dev.jta.runtime.upload.UploadedFile} - populados
+ *                        pelo runtime a partir de partes de arquivo de uma
+ *                        requisicao {@code multipart/form-data}, nunca a
+ *                        partir de query params/form fields de texto.
  */
 public record ComponentMetadata(
         String fqn,
@@ -83,7 +100,11 @@ public record ComponentMetadata(
         Map<String, List<String>> actionParams,
         List<String> inputs,
         List<String> children,
-        boolean csrfExempt
+        boolean csrfExempt,
+        boolean hasSlot,
+        boolean isErrorPage,
+        int errorPageStatus,
+        List<String> uploadFields
 ) {
     public boolean isPage() {
         return routePath != null && !routePath.isBlank();

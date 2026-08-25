@@ -80,6 +80,8 @@ public final class JtaPageDispatcher {
         invoker.populateFromParams(instance, queryParams, bindableFields);
         invoker.populateFromPathVariables(instance, pathVariables, bindableFields);
         invoker.applySession(instance, session);
+        FlashSupport.Values flash = FlashSupport.consume(session);
+        invoker.applyFlash(instance, flash.success(), flash.error());
         invoker.callInitIfPresent(instance);
 
         StringOutput pageOutput = new StringOutput();

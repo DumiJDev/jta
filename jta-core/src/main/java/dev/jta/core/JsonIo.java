@@ -53,7 +53,11 @@ final class JsonIo {
             sb.append("    \"actionParams\": ").append(writeStringListMap(m.actionParams())).append(",\n");
             sb.append("    \"inputs\": ").append(writeStringArray(m.inputs())).append(",\n");
             sb.append("    \"children\": ").append(writeStringArray(m.children())).append(",\n");
-            sb.append("    \"csrfExempt\": ").append(m.csrfExempt()).append("\n");
+            sb.append("    \"csrfExempt\": ").append(m.csrfExempt()).append(",\n");
+            sb.append("    \"hasSlot\": ").append(m.hasSlot()).append(",\n");
+            sb.append("    \"isErrorPage\": ").append(m.isErrorPage()).append(",\n");
+            sb.append("    \"errorPageStatus\": ").append(m.errorPageStatus()).append(",\n");
+            sb.append("    \"uploadFields\": ").append(writeStringArray(m.uploadFields())).append("\n");
             sb.append("  }");
             if (i < items.size() - 1) {
                 sb.append(",");
@@ -101,6 +105,10 @@ final class JsonIo {
         List<String> inputs = List.of();
         List<String> children = List.of();
         boolean csrfExempt = false;
+        boolean hasSlot = false;
+        boolean isErrorPage = false;
+        int errorPageStatus = 0;
+        List<String> uploadFields = List.of();
 
         c.skipWhitespace();
         while (c.peek() != '}') {
@@ -128,6 +136,10 @@ final class JsonIo {
                 case "inputs" -> inputs = c.readStringArray();
                 case "children" -> children = c.readStringArray();
                 case "csrfExempt" -> csrfExempt = c.readBoolean();
+                case "hasSlot" -> hasSlot = c.readBoolean();
+                case "isErrorPage" -> isErrorPage = c.readBoolean();
+                case "errorPageStatus" -> errorPageStatus = (int) c.readLong();
+                case "uploadFields" -> uploadFields = c.readStringArray();
                 default -> c.skipValue();
             }
             c.skipWhitespace();
@@ -139,7 +151,7 @@ final class JsonIo {
         c.expect('}');
         return new ComponentMetadata(fqn, selector, explicitSelector, routePath, actions, template, scopedCss,
                 isLayout, layoutFqn, requiredRoles, allowAnonymous, ssePath, sseIntervalMillis, bindableFields,
-                actionParams, inputs, children, csrfExempt);
+                actionParams, inputs, children, csrfExempt, hasSlot, isErrorPage, errorPageStatus, uploadFields);
     }
 
     /**

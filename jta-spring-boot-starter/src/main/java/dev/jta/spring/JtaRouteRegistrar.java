@@ -2,6 +2,7 @@ package dev.jta.spring;
 
 import dev.jta.core.ComponentMetadata;
 import dev.jta.core.ComponentRegistry;
+import dev.jta.runtime.JtaErrorPageRenderer;
 import dev.jta.runtime.JtaPageDispatcher;
 import dev.jta.runtime.PageResult;
 import jakarta.servlet.http.HttpServletRequest;
@@ -17,6 +18,7 @@ import org.springframework.web.servlet.mvc.method.annotation.RequestMappingHandl
 import java.lang.reflect.Method;
 import java.util.HashMap;
 import java.util.Map;
+import java.util.Optional;
 
 /**
  * Registra dinamicamente um endpoint GET para cada componente com
@@ -64,13 +66,16 @@ class JtaRouteRegistrar implements InitializingBean {
     private final ComponentRegistry registry;
     private final JtaPageDispatcher dispatcher;
     private final RequestMappingHandlerMapping handlerMapping;
+    private final JtaErrorPageRenderer errorPageRenderer;
 
     private final Map<String, ComponentMetadata> pathToComponent = new HashMap<>();
 
-    JtaRouteRegistrar(ComponentRegistry registry, JtaPageDispatcher dispatcher, RequestMappingHandlerMapping handlerMapping) {
+    JtaRouteRegistrar(ComponentRegistry registry, JtaPageDispatcher dispatcher, RequestMappingHandlerMapping handlerMapping,
+                       JtaErrorPageRenderer errorPageRenderer) {
         this.registry = registry;
         this.dispatcher = dispatcher;
         this.handlerMapping = handlerMapping;
+        this.errorPageRenderer = errorPageRenderer;
     }
 
     @Override
@@ -93,7 +98,7 @@ class JtaRouteRegistrar implements InitializingBean {
         String matchedPattern = (String) request.getAttribute(HandlerMapping.BEST_MATCHING_PATTERN_ATTRIBUTE);
         ComponentMetadata metadata = matchedPattern != null ? pathToComponent.get(matchedPattern) : null;
         if (metadata == null) {
-            return ResponseEntity.status(HttpStatus.NOT_FOUND).build();
+            return errorResponse(HttpStatus.NOT_FOUND, request.getRequestURI());
         }
 
         @SuppressWarnings("unchecked")
@@ -105,7 +110,7 @@ class JtaRouteRegistrar implements InitializingBean {
                 SpringCurrentUser.current(), new ServletJtaSession(request.getSession(true)), cookieHeader);
 
         if (result instanceof PageResult.Forbidden) {
-            return ResponseEntity.status(HttpStatus.FORBIDDEN).build();
+            return errorResponse(HttpStatus.FORBIDDEN, request.getRequestURI());
         }
         PageResult.Rendered rendered = (PageResult.Rendered) result;
         ResponseEntity.BodyBuilder response = ResponseEntity.ok().contentType(MediaType.TEXT_HTML);
@@ -113,5 +118,18 @@ class JtaRouteRegistrar implements InitializingBean {
             response.header("Set-Cookie", rendered.csrfSetCookieHeader());
         }
         return response.body(rendered.html());
+    }
+
+    /**
+     * Renderiza o componente {@code @ErrorPage} registrado para
+     * {@code status}, se algum (ver {@link JtaErrorPageRenderer}) - sem
+     * nenhum registrado, cai no comportamento pre-existente (corpo vazio).
+     */
+    private ResponseEntity<String> errorResponse(HttpStatus status, String path) {
+        Optional<String> html = errorPageRenderer.render(status.value(), path, null);
+        if (html.isEmpty()) {
+            return ResponseEntity.status(status).build();
+        }
+        return ResponseEntity.status(status).contentType(MediaType.TEXT_HTML).body(html.get());
     }
 }
