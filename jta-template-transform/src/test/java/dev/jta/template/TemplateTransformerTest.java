@@ -51,7 +51,7 @@ class TemplateTransformerTest {
 
     @Test
     void tagDeFilhoResolvidaGeraChamadaDeTemplateNativa() {
-        var child = new TemplateTransformer.ChildRef("dev.jta.demo.Card", "meu-card", Set.of("titulo"), false);
+        var child = new TemplateTransformer.ChildRef("dev.jta.demo.Card", "meu-card", Set.of("titulo"), false, false);
         TemplateTransformer.Result result = TemplateTransformer.transform(
                 "<div><meu-card [titulo]=\"tituloDaLista\"/></div>", "pai-sel", Set.of("tituloDaLista"), NO_METHODS,
                 NO_ACTIONS, NO_NULLABLE, NO_MESSAGES, Map.of("meu-card", child));
@@ -67,7 +67,7 @@ class TemplateTransformerTest {
 
     @Test
     void bindingComChavesDuplasEAceitoComoAlternativaDeEscrita() {
-        var child = new TemplateTransformer.ChildRef("dev.jta.demo.Card", "meu-card", Set.of("ativo"), false);
+        var child = new TemplateTransformer.ChildRef("dev.jta.demo.Card", "meu-card", Set.of("ativo"), false, false);
         TemplateTransformer.Result result = TemplateTransformer.transform(
                 "<div><meu-card [ativo]=\"{{ true }}\"/></div>", "pai-sel", NO_FIELDS, NO_METHODS,
                 NO_ACTIONS, NO_NULLABLE, NO_MESSAGES, Map.of("meu-card", child));
@@ -78,7 +78,7 @@ class TemplateTransformerTest {
 
     @Test
     void tagDeFilhoNaoResolvidaEErroComDidYouMean() {
-        var child = new TemplateTransformer.ChildRef("dev.jta.demo.Card", "meu-card", Set.of(), false);
+        var child = new TemplateTransformer.ChildRef("dev.jta.demo.Card", "meu-card", Set.of(), false, false);
         TemplateTransformer.Result result = TemplateTransformer.transform(
                 "<div><meu-crad/></div>", "pai-sel", NO_FIELDS, NO_METHODS, NO_ACTIONS, NO_NULLABLE, NO_MESSAGES,
                 Map.of("meu-card", child));
@@ -90,7 +90,7 @@ class TemplateTransformerTest {
 
     @Test
     void propertyBindingParaCampoNaoInputEErro() {
-        var child = new TemplateTransformer.ChildRef("dev.jta.demo.Card", "meu-card", Set.of("titulo"), false);
+        var child = new TemplateTransformer.ChildRef("dev.jta.demo.Card", "meu-card", Set.of("titulo"), false, false);
         TemplateTransformer.Result result = TemplateTransformer.transform(
                 "<div><meu-card [naoExiste]=\"x\"/></div>", "pai-sel", Set.of("x"), NO_METHODS, NO_ACTIONS,
                 NO_NULLABLE, NO_MESSAGES, Map.of("meu-card", child));
@@ -101,7 +101,7 @@ class TemplateTransformerTest {
 
     @Test
     void raizDeBindingInexistenteNoPaiEErro() {
-        var child = new TemplateTransformer.ChildRef("dev.jta.demo.Card", "meu-card", Set.of("titulo"), false);
+        var child = new TemplateTransformer.ChildRef("dev.jta.demo.Card", "meu-card", Set.of("titulo"), false, false);
         TemplateTransformer.Result result = TemplateTransformer.transform(
                 "<div><meu-card [titulo]=\"naoExiste\"/></div>", "pai-sel", NO_FIELDS, NO_METHODS, NO_ACTIONS,
                 NO_NULLABLE, NO_MESSAGES, Map.of("meu-card", child));
@@ -112,7 +112,7 @@ class TemplateTransformerTest {
 
     @Test
     void filhoAninhadoDentroDeForUsaVariavelDeLoopNoInput() {
-        var child = new TemplateTransformer.ChildRef("dev.jta.demo.Linha", "aluno-linha", Set.of("nome"), false);
+        var child = new TemplateTransformer.ChildRef("dev.jta.demo.Linha", "aluno-linha", Set.of("nome"), false, false);
         String template = "<div>@for(var aluno : self.alunos())<aluno-linha [nome]=\"aluno.nome\"/>@endfor</div>";
         TemplateTransformer.Result result = TemplateTransformer.transform(
                 template, "pai-sel", Set.of(), Set.of("alunos"), NO_ACTIONS, NO_NULLABLE, NO_MESSAGES,
@@ -124,7 +124,7 @@ class TemplateTransformerTest {
 
     @Test
     void layoutUsadoComoFilhoEErro() {
-        var layout = new TemplateTransformer.ChildRef("dev.jta.demo.SiteLayout", "site-layout", Set.of(), true);
+        var layout = new TemplateTransformer.ChildRef("dev.jta.demo.SiteLayout", "site-layout", Set.of(), true, false);
         TemplateTransformer.Result result = TemplateTransformer.transform(
                 "<div><site-layout/></div>", "pai-sel", NO_FIELDS, NO_METHODS, NO_ACTIONS, NO_NULLABLE, NO_MESSAGES,
                 Map.of("site-layout", layout));
@@ -135,13 +135,97 @@ class TemplateTransformerTest {
 
     @Test
     void raizDoTemplateComoTagDeFilhoEErro() {
-        var child = new TemplateTransformer.ChildRef("dev.jta.demo.Card", "meu-card", Set.of(), false);
+        var child = new TemplateTransformer.ChildRef("dev.jta.demo.Card", "meu-card", Set.of(), false, false);
         TemplateTransformer.Result result = TemplateTransformer.transform(
                 "<meu-card/>", "pai-sel", NO_FIELDS, NO_METHODS, NO_ACTIONS, NO_NULLABLE, NO_MESSAGES,
                 Map.of("meu-card", child));
 
         assertTrue(result.hasErrors());
         assertEquals("root-is-child", result.errors().get(0).kind());
+    }
+
+    // --- slots (conteudo projetado via <tag>...</tag>) ---
+
+    @Test
+    void slotVazioDeclaraParametroDeContentESemFallback() {
+        TemplateTransformer.Result result = TemplateTransformer.transform(
+                "<div><slot/></div>", "meu-sel", NO_FIELDS, NO_METHODS, NO_ACTIONS, NO_NULLABLE, NO_MESSAGES, NO_CHILDREN);
+
+        assertFalse(result.hasErrors(), errorsOf(result));
+        assertTrue(result.hasSlot());
+        String jte = result.generatedJte();
+        assertTrue(jte.contains("@if(__jtaSlotDefault != null)${__jtaSlotDefault}@else"));
+        assertTrue(jte.contains("@endif"));
+    }
+
+    @Test
+    void slotComFallbackTransformaInterpolacaoDoFallback() {
+        TemplateTransformer.Result result = TemplateTransformer.transform(
+                "<div><slot>{{ vazio }}</slot></div>", "meu-sel", Set.of("vazio"), NO_METHODS, NO_ACTIONS,
+                NO_NULLABLE, NO_MESSAGES, NO_CHILDREN);
+
+        assertFalse(result.hasErrors(), errorsOf(result));
+        assertTrue(result.generatedJte().contains("${self.vazio}"));
+    }
+
+    @Test
+    void templateSemSlotNaoDeclaraHasSlot() {
+        TemplateTransformer.Result result = TemplateTransformer.transform(
+                "<div>{{ x }}</div>", "meu-sel", Set.of("x"), NO_METHODS, NO_ACTIONS, NO_NULLABLE, NO_MESSAGES, NO_CHILDREN);
+
+        assertFalse(result.hasSlot());
+    }
+
+    @Test
+    void tagFilhoComCorpoPassaConteudoComoSlotDefault() {
+        var child = new TemplateTransformer.ChildRef("dev.jta.demo.Card", "meu-card", Set.of(), false, true);
+        TemplateTransformer.Result result = TemplateTransformer.transform(
+                "<div><meu-card>{{ titulo }}</meu-card></div>", "pai-sel", Set.of("titulo"), NO_METHODS,
+                NO_ACTIONS, NO_NULLABLE, NO_MESSAGES, Map.of("meu-card", child));
+
+        assertFalse(result.hasErrors(), errorsOf(result));
+        assertTrue(result.warnings().isEmpty(), "filho declara slot, nao deveria haver aviso");
+        String jte = result.generatedJte();
+        assertTrue(jte.contains("@template.dev.jta.demo.Card(self = "));
+        assertTrue(jte.contains("__jtaInvoker = __jtaInvoker"));
+        assertTrue(jte.contains("__jtaSlotDefault = @`"));
+        assertTrue(jte.contains("${self.titulo}"), "interpolacao dentro do slot deve resolver contra o PAI");
+    }
+
+    @Test
+    void tagFilhoComCorpoMasFilhoSemSlotGeraAviso() {
+        var child = new TemplateTransformer.ChildRef("dev.jta.demo.Card", "meu-card", Set.of(), false, false);
+        TemplateTransformer.Result result = TemplateTransformer.transform(
+                "<div><meu-card>texto</meu-card></div>", "pai-sel", NO_FIELDS, NO_METHODS,
+                NO_ACTIONS, NO_NULLABLE, NO_MESSAGES, Map.of("meu-card", child));
+
+        assertFalse(result.hasErrors(), errorsOf(result));
+        assertEquals(1, result.warnings().size());
+        assertEquals("unused-slot-content", result.warnings().get(0).kind());
+    }
+
+    @Test
+    void tagFilhoAutoFechadaContinuaSemChamadaNomeada() {
+        var child = new TemplateTransformer.ChildRef("dev.jta.demo.Card", "meu-card", Set.of(), false, true);
+        TemplateTransformer.Result result = TemplateTransformer.transform(
+                "<div><meu-card/></div>", "pai-sel", NO_FIELDS, NO_METHODS, NO_ACTIONS, NO_NULLABLE, NO_MESSAGES,
+                Map.of("meu-card", child));
+
+        assertFalse(result.hasErrors(), errorsOf(result));
+        assertTrue(result.warnings().isEmpty());
+        assertTrue(result.generatedJte().contains(", __jtaInvoker)"),
+                "sem conteudo de slot, a chamada permanece posicional - zero mudanca de comportamento previo");
+    }
+
+    @Test
+    void eventBindingDentroDeConteudoDeSlotEErro() {
+        var child = new TemplateTransformer.ChildRef("dev.jta.demo.Card", "meu-card", Set.of(), false, true);
+        TemplateTransformer.Result result = TemplateTransformer.transform(
+                "<div><meu-card><button (click)=\"salvar()\">Salvar</button></meu-card></div>", "pai-sel",
+                NO_FIELDS, NO_METHODS, Map.of("salvar", List.of()), NO_NULLABLE, NO_MESSAGES, Map.of("meu-card", child));
+
+        assertTrue(result.hasErrors());
+        assertEquals("slot-event-binding", result.errors().get(0).kind());
     }
 
     // --- argumentos em acoes ---

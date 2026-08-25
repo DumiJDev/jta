@@ -53,7 +53,11 @@ public class SmokeTest {
                 Map.of("remover", List.of("String")),
                 List.of("titulo"),
                 List.of("dev.jta.demo.Card"),
-                false
+                false,
+                false,
+                false,
+                0,
+                List.of()
         );
         String json = ComponentMetadataIo.toJson(List.of(original));
         List<ComponentMetadata> parsed = ComponentMetadataIo.fromJson(json);
@@ -85,7 +89,8 @@ public class SmokeTest {
         // component with no route (not a page) and no style
         ComponentMetadata partial = new ComponentMetadata(
                 "dev.jta.demo.Button", "jta-demo-button", true, null, List.of(), "dev/jta/demo/Button.jte", null,
-                false, null, List.of(), true, null, 0L, List.of(), Map.of(), List.of(), List.of(), false);
+                false, null, List.of(), true, null, 0L, List.of(), Map.of(), List.of(), List.of(), false,
+                false, false, 0, List.of());
         List<ComponentMetadata> parsedPartial = ComponentMetadataIo.fromJson(ComponentMetadataIo.toJson(List.of(partial)));
         checkTrue("null routePath round-trips as null", parsedPartial.get(0).routePath() == null);
         checkTrue("non-page isPage() is false", !parsedPartial.get(0).isPage());
@@ -99,7 +104,7 @@ public class SmokeTest {
         ComponentMetadata layout = new ComponentMetadata(
                 "dev.jta.demo.SiteLayout", "dev-jta-demo-site-layout", false, null, List.of(),
                 "dev/jta/demo/SiteLayout.jte", null, true, null, List.of(), false, null, 0L, List.of(),
-                Map.of(), List.of(), List.of(), false);
+                Map.of(), List.of(), List.of(), false, false, false, 0, List.of());
         List<ComponentMetadata> parsedLayout = ComponentMetadataIo.fromJson(ComponentMetadataIo.toJson(List.of(layout)));
         checkTrue("layout isLayout() true", parsedLayout.get(0).isLayout());
         checkTrue("layout isPage() false (no routePath)", !parsedLayout.get(0).isPage());
@@ -131,6 +136,10 @@ public class SmokeTest {
                         && parsedOldFormat.get(0).children().isEmpty());
         checkTrue("components.json antigo (sem csrfExempt) carrega com default false",
                 !parsedOldFormat.get(0).csrfExempt());
+        checkTrue("components.json antigo (sem hasSlot/isErrorPage/uploadFields) carrega com defaults",
+                !parsedOldFormat.get(0).hasSlot() && !parsedOldFormat.get(0).isErrorPage()
+                        && parsedOldFormat.get(0).errorPageStatus() == 0
+                        && parsedOldFormat.get(0).uploadFields().isEmpty());
 
         // JtaConfig (jta.config.toml minimal parser)
         String toml = """

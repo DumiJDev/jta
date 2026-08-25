@@ -87,6 +87,19 @@ class JtaHttpServerIntegrationTest {
     }
 
     @Test
+    void paginaComSlotRendersConteudoProjetadoEFallback() throws Exception {
+        HttpResponse<String> response = client.send(
+                HttpRequest.newBuilder(URI.create(baseUrl() + "/slot-consumer")).GET().build(),
+                HttpResponse.BodyHandlers.ofString());
+
+        assertEquals(200, response.statusCode());
+        // primeiro <slot-card>: conteudo projetado ({{ titulo }} do PAI, "Ola")
+        assertTrue(response.body().contains("Ola"), "conteudo projetado (slot default) deveria aparecer: " + response.body());
+        // segundo <slot-card/> (auto-fechada, sem corpo): usa o fallback do proprio slot
+        assertTrue(response.body().contains("sem conteudo"), "fallback do <slot> deveria aparecer quando nenhum conteudo e passado: " + response.body());
+    }
+
+    @Test
     void acaoIncrementarReidrataEstadoEDevolveFragmento() throws Exception {
         String selector = SelectorDerivation.derive("dev.jta.standalone.Contador");
         Csrf csrf = fetchCsrf();
@@ -202,6 +215,88 @@ class JtaHttpServerIntegrationTest {
 
         assertEquals(200, response.statusCode());
         assertTrue(response.body().contains(">2<"));
+    }
+
+    // --- flash messages de uso unico ---
+
+    @Test
+    void redirectComFlashPopulaProximaPaginaEEDeUsoUnico() throws Exception {
+        String selectorOrigem = SelectorDerivation.derive("dev.jta.standalone.FlashOrigem");
+
+        HttpResponse<String> origemPagina = client.send(
+                HttpRequest.newBuilder(URI.create(baseUrl() + "/flash-origem")).GET().build(),
+                HttpResponse.BodyHandlers.ofString());
+        String sessionCookie = origemPagina.headers().allValues("Set-Cookie").stream()
+                .filter(v -> v.startsWith("JTASESSIONID=")).findFirst().orElseThrow().split(";", 2)[0];
+        String csrfCookie = origemPagina.headers().allValues("Set-Cookie").stream()
+                .filter(v -> v.startsWith("jta_csrf=")).findFirst().orElseThrow().split(";", 2)[0];
+        Matcher tokenMatcher = CSRF_TOKEN_PATTERN.matcher(origemPagina.body());
+        assertTrue(tokenMatcher.find());
+        String combinedCookie = sessionCookie + "; " + csrfCookie;
+
+        HttpResponse<String> acao = client.send(
+                HttpRequest.newBuilder(URI.create(baseUrl() + "/__jta/action/" + selectorOrigem + "?action=disparar"))
+                        .header("Content-Type", "application/x-www-form-urlencoded")
+                        .header("Cookie", combinedCookie)
+                        .header("X-JTA-CSRF-Token", tokenMatcher.group(1))
+                        .POST(HttpRequest.BodyPublishers.ofString(""))
+                        .build(),
+                HttpResponse.BodyHandlers.ofString());
+        assertEquals(200, acao.statusCode());
+        assertEquals("/flash-destino", acao.headers().firstValue("HX-Redirect").orElseThrow());
+
+        HttpResponse<String> destino = client.send(
+                HttpRequest.newBuilder(URI.create(baseUrl() + "/flash-destino"))
+                        .header("Cookie", sessionCookie)
+                        .GET().build(),
+                HttpResponse.BodyHandlers.ofString());
+        assertTrue(destino.body().contains("Operacao concluida!"),
+                "a flash deveria aparecer na PROXIMA pagina renderizada apos o redirect: " + destino.body());
+
+        HttpResponse<String> destinoDeNovo = client.send(
+                HttpRequest.newBuilder(URI.create(baseUrl() + "/flash-destino"))
+                        .header("Cookie", sessionCookie)
+                        .GET().build(),
+                HttpResponse.BodyHandlers.ofString());
+        assertFalse(destinoDeNovo.body().contains("Operacao concluida!"),
+                "flash e de USO UNICO - um segundo GET com o mesmo cookie de sessao nao deveria mais ve-la: " + destinoDeNovo.body());
+    }
+
+    // --- upload de arquivo via multipart/form-data ---
+
+    @Test
+    void acaoComUploadPopulaCampoUploadedFileAPartirDeMultipart() throws Exception {
+        String selector = SelectorDerivation.derive("dev.jta.standalone.UploadDemo");
+
+        HttpResponse<String> pagina = client.send(
+                HttpRequest.newBuilder(URI.create(baseUrl() + "/upload-demo")).GET().build(),
+                HttpResponse.BodyHandlers.ofString());
+        String sessionCookie = pagina.headers().allValues("Set-Cookie").stream()
+                .filter(v -> v.startsWith("JTASESSIONID=")).findFirst().orElseThrow().split(";", 2)[0];
+        String csrfCookie = pagina.headers().allValues("Set-Cookie").stream()
+                .filter(v -> v.startsWith("jta_csrf=")).findFirst().orElseThrow().split(";", 2)[0];
+        Matcher tokenMatcher = CSRF_TOKEN_PATTERN.matcher(pagina.body());
+        assertTrue(tokenMatcher.find());
+
+        String boundary = "----teste-boundary-jta";
+        String multipartBody = "--" + boundary + "\r\n"
+                + "Content-Disposition: form-data; name=\"avatar\"; filename=\"perfil.png\"\r\n"
+                + "Content-Type: image/png\r\n\r\n"
+                + "bytes-fake-de-imagem\r\n"
+                + "--" + boundary + "--\r\n";
+
+        HttpResponse<String> acao = client.send(
+                HttpRequest.newBuilder(URI.create(baseUrl() + "/__jta/action/" + selector + "?action=enviar"))
+                        .header("Content-Type", "multipart/form-data; boundary=" + boundary)
+                        .header("Cookie", sessionCookie + "; " + csrfCookie)
+                        .header("X-JTA-CSRF-Token", tokenMatcher.group(1))
+                        .POST(HttpRequest.BodyPublishers.ofString(multipartBody))
+                        .build(),
+                HttpResponse.BodyHandlers.ofString());
+
+        assertEquals(200, acao.statusCode());
+        assertTrue(acao.body().contains("perfil.png"),
+                "o campo UploadedFile deveria ter sido populado com o nome do arquivo enviado: " + acao.body());
     }
 
     // --- sessao agnostica ---
@@ -369,5 +464,49 @@ class JtaHttpServerIntegrationTest {
                 HttpResponse.BodyHandlers.ofString());
 
         assertEquals(500, response.statusCode());
+    }
+
+    // --- paginas de erro como componente (@ErrorPage) ---
+
+    /**
+     * {@link NotFoundPage}, registrada com {@code @ErrorPage(404)}, deve
+     * renderizar (com o status/path reservados populados) quando nenhuma
+     * rota bate - em vez do corpo vazio pre-existente (ver
+     * {@code JtaErrorPageRenderer}).
+     */
+    @Test
+    void rotaInexistenteRenderizaComponenteDeErrorPageRegistrado() throws Exception {
+        HttpResponse<String> response = client.send(
+                HttpRequest.newBuilder(URI.create(baseUrl() + "/esta-rota-nao-existe")).GET().build(),
+                HttpResponse.BodyHandlers.ofString());
+
+        assertEquals(404, response.statusCode());
+        assertTrue(response.body().contains("id=\"erro-status\">404<"),
+                "errorStatus deveria ter sido populado pelo runtime: " + response.body());
+        assertTrue(response.body().contains("id=\"erro-path\">/esta-rota-nao-existe<"),
+                "errorPath deveria ter sido populado com o path que originou o 404: " + response.body());
+    }
+
+    /**
+     * Sem nenhum {@code @ErrorPage} registrado para o status (403 nao tem
+     * nenhum componente registrado neste modulo de teste - so
+     * {@link NotFoundPage}, para 404), o comportamento pre-existente (corpo
+     * vazio) se mantem - puramente aditivo. Reusa o mesmo cenario de
+     * {@code postSemCookieNemHeaderCsrfDevolve403} (POST sem CSRF) so para
+     * confirmar o corpo, nao so o status.
+     */
+    @Test
+    void statusSemErrorPageRegistradoContinuaComCorpoVazio() throws Exception {
+        String selector = SelectorDerivation.derive("dev.jta.standalone.Contador");
+
+        HttpResponse<String> response = client.send(
+                HttpRequest.newBuilder(URI.create(baseUrl() + "/__jta/action/" + selector + "?action=incrementar"))
+                        .header("Content-Type", "application/x-www-form-urlencoded")
+                        .POST(HttpRequest.BodyPublishers.ofString(""))
+                        .build(),
+                HttpResponse.BodyHandlers.ofString());
+
+        assertEquals(403, response.statusCode());
+        assertTrue(response.body().isEmpty());
     }
 }

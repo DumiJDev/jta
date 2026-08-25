@@ -8,6 +8,7 @@ import dev.jta.core.JtaConfig;
 import dev.jta.core.Layout;
 import dev.jta.core.AllowAnonymous;
 import dev.jta.core.CsrfExempt;
+import dev.jta.core.ErrorPage;
 import dev.jta.core.RequiresRole;
 import dev.jta.core.Route;
 import dev.jta.core.Sse;
@@ -421,7 +422,7 @@ public class JtaAnnotationProcessor extends AbstractProcessor {
             }
         }
 
-        String generatedRelativePath = writeGeneratedJte(fqn, type, jteHeader(fqn) + result.generatedJte());
+        String generatedRelativePath = writeGeneratedJte(fqn, type, jteHeader(fqn, result.hasSlot()) + result.generatedJte());
         if (generatedRelativePath == null) {
             return;
         }
@@ -460,11 +461,18 @@ public class JtaAnnotationProcessor extends AbstractProcessor {
 
         boolean csrfExempt = type.getAnnotation(CsrfExempt.class) != null;
 
+        ErrorPage errorPage = type.getAnnotation(ErrorPage.class);
+        boolean isErrorPage = errorPage != null;
+        int errorPageStatus = errorPage != null ? errorPage.value() : 0;
+
+        reportWarningsIfAny(result, type);
+
         allMetadata.add(new ComponentMetadata(
                 fqn, selector, explicit, routePath, List.copyOf(known.actions()), generatedRelativePath,
                 scopedCss, false, layoutFqn, security.roles(), security.allowAnonymous(), ssePath, sseIntervalMillis,
                 List.copyOf(bindableFields), known.actionParams(), List.copyOf(known.inputFields()),
-                List.copyOf(new LinkedHashSet<>(result.children())), csrfExempt));
+                List.copyOf(new LinkedHashSet<>(result.children())), csrfExempt, result.hasSlot(), isErrorPage,
+                errorPageStatus, List.copyOf(known.uploadFields())));
     }
 
     /**
@@ -481,8 +489,9 @@ public class JtaAnnotationProcessor extends AbstractProcessor {
      * nenhum aninhamento (um {@code @param} nunca usado no corpo do
      * template nao tem custo de runtime).
      */
-    private String jteHeader(String fqn) {
-        return "@param " + fqn + " self\n@param dev.jta.runtime.ComponentInvoker __jtaInvoker\n";
+    private String jteHeader(String fqn, boolean hasSlot) {
+        String slotParam = hasSlot ? "@param gg.jte.Content __jtaSlotDefault = null\n" : "";
+        return "@param " + fqn + " self\n@param dev.jta.runtime.ComponentInvoker __jtaInvoker\n" + slotParam;
     }
 
     private record Security(List<String> roles, boolean allowAnonymous) {
@@ -580,7 +589,8 @@ public class JtaAnnotationProcessor extends AbstractProcessor {
             return; // erro ja reportado (zero ou mais de um <router-outlet/>)
         }
 
-        String header = "@param " + fqn + " self\n@param String content\n@param dev.jta.runtime.ComponentInvoker __jtaInvoker\n";
+        String slotParam = result.hasSlot() ? "@param gg.jte.Content __jtaSlotDefault = null\n" : "";
+        String header = "@param " + fqn + " self\n@param String content\n@param dev.jta.runtime.ComponentInvoker __jtaInvoker\n" + slotParam;
         String generatedRelativePath = writeGeneratedJte(fqn, type, header + jteWithOutlet);
         if (generatedRelativePath == null) {
             return;
@@ -588,10 +598,13 @@ public class JtaAnnotationProcessor extends AbstractProcessor {
 
         String scopedCss = CssScoper.scope(rawCss, selector);
 
+        reportWarningsIfAny(result, type);
+
         allMetadata.add(new ComponentMetadata(
                 fqn, selector, false, null, List.copyOf(known.actions()), generatedRelativePath,
                 scopedCss, true, null, List.of(), false, null, 0, List.of(), known.actionParams(),
-                List.copyOf(known.inputFields()), List.copyOf(new LinkedHashSet<>(result.children())), false));
+                List.copyOf(known.inputFields()), List.copyOf(new LinkedHashSet<>(result.children())), false,
+                result.hasSlot(), false, 0, List.copyOf(known.uploadFields())));
     }
 
     private String resolveSelector(String explicitSelector, String fqn, TypeElement type) {
@@ -662,7 +675,37 @@ public class JtaAnnotationProcessor extends AbstractProcessor {
     private TemplateTransformer.ChildRef toChildRef(TypeElement childType) {
         String childFqn = elementUtils.getBinaryName(childType).toString();
         boolean isLayout = childType.getAnnotation(Layout.class) != null;
-        return new TemplateTransformer.ChildRef(childFqn, peekSelector(childType), collectInputFields(childType), isLayout);
+        return new TemplateTransformer.ChildRef(childFqn, peekSelector(childType), collectInputFields(childType), isLayout, peekHasSlot(childType));
+    }
+
+    /**
+     * "Espia" (mesmo espirito de {@link #peekSelector}) se o template de
+     * {@code childType} declara {@code <slot/>}, sem processa-lo de
+     * verdade - usado so para o aviso de conteudo de slot sem slot para
+     * recebe-lo (ver {@link TemplateTransformer#transform}).
+     *
+     * <p><b>Melhor esforco, nunca erro:</b> so funciona quando o template
+     * do filho e inline ({@code template() = "..."}) - um
+     * {@code templateUrl()} pode apontar para um arquivo de outro modulo
+     * (jar ja compilado), que este processor nao tem como reler. Nesse
+     * caso (ou se a anotacao nao puder ser lida por qualquer motivo),
+     * devolve {@code false} - o pior resultado disso e um aviso
+     * possivelmente falso-positivo, nunca uma falha de build.
+     */
+    private boolean peekHasSlot(TypeElement childType) {
+        try {
+            AComponent component = childType.getAnnotation(AComponent.class);
+            if (component != null && !component.template().isBlank()) {
+                return TemplateTransformer.scanHasSlot(component.template());
+            }
+            Layout layout = childType.getAnnotation(Layout.class);
+            if (layout != null && !layout.template().isBlank()) {
+                return TemplateTransformer.scanHasSlot(layout.template());
+            }
+        } catch (RuntimeException e) {
+            // melhor esforco - ver javadoc acima.
+        }
+        return false;
     }
 
     private Set<String> collectInputFields(TypeElement type) {
@@ -721,8 +764,16 @@ public class JtaAnnotationProcessor extends AbstractProcessor {
 
     private record FieldsAndMethods(Set<String> fields, Set<String> templateMethods, Set<String> actions,
                                      Set<String> nullableFields, Set<String> explicitlyBindableFields,
-                                     Map<String, List<String>> actionParams, Set<String> inputFields) {
+                                     Map<String, List<String>> actionParams, Set<String> inputFields,
+                                     Set<String> uploadFields) {
     }
+
+    // FQN exato de dev.jta.runtime.upload.UploadedFile - comparado como
+    // String (nao como Class/TypeMirror real) porque jta-processor nao
+    // depende de jta-runtime (o processor roda so em compile-time, o tipo
+    // so precisa existir no classpath do MODULO SENDO COMPILADO, nunca no
+    // do proprio processor).
+    private static final String UPLOADED_FILE_FQN = "dev.jta.runtime.upload.UploadedFile";
 
     /**
      * @return {@code null} se algum metodo de acao declarar um parametro
@@ -736,6 +787,7 @@ public class JtaAnnotationProcessor extends AbstractProcessor {
         Set<String> actions = new LinkedHashSet<>();
         Set<String> nullableFields = new LinkedHashSet<>();
         Set<String> explicitlyBindableFields = new LinkedHashSet<>();
+        Set<String> uploadFields = new LinkedHashSet<>();
         Map<String, List<String>> actionParams = new LinkedHashMap<>();
         boolean valid = true;
 
@@ -750,6 +802,9 @@ public class JtaAnnotationProcessor extends AbstractProcessor {
                 }
                 if (hasAnnotationNamed(member, "Bindable")) {
                     explicitlyBindableFields.add(member.getSimpleName().toString());
+                }
+                if (UPLOADED_FILE_FQN.equals(member.asType().toString())) {
+                    uploadFields.add(member.getSimpleName().toString());
                 }
             } else if (member.getKind() == ElementKind.METHOD && member.getModifiers().contains(Modifier.PUBLIC)) {
                 ExecutableElement method = (ExecutableElement) member;
@@ -784,7 +839,7 @@ public class JtaAnnotationProcessor extends AbstractProcessor {
             return null;
         }
         return new FieldsAndMethods(fields, templateMethods, actions, nullableFields, explicitlyBindableFields,
-                actionParams, collectInputFields(type));
+                actionParams, collectInputFields(type), uploadFields);
     }
 
     /**
@@ -832,6 +887,17 @@ public class JtaAnnotationProcessor extends AbstractProcessor {
             return false;
         }
         return true;
+    }
+
+    /**
+     * Diferente de {@link #reportErrorsIfAny}, nunca falha o build - so
+     * sinaliza (ex: conteudo passado para um slot que o filho pode nao
+     * declarar, ver {@code TemplateTransformer#transformChildTagsWithBody}).
+     */
+    private void reportWarningsIfAny(TemplateTransformer.Result result, TypeElement type) {
+        for (TemplateTransformer.ValidationError warning : result.warnings()) {
+            messager.printMessage(Diagnostic.Kind.WARNING, "[JTA] " + warning.message(), type);
+        }
     }
 
     /**

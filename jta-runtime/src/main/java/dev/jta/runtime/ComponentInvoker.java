@@ -1,6 +1,7 @@
 package dev.jta.runtime;
 
 import dev.jta.runtime.session.JtaSession;
+import dev.jta.runtime.upload.UploadedFile;
 import jakarta.validation.ConstraintViolation;
 import jakarta.validation.Validator;
 
@@ -145,6 +146,37 @@ public final class ComponentInvoker {
                 continue;
             }
             setField(instance, field, value);
+        }
+    }
+
+    /**
+     * Popula campos publicos do tipo {@link UploadedFile} a partir das
+     * partes de arquivo de uma requisicao {@code multipart/form-data} -
+     * mesma restricao de allowlist de {@link #populateFromParams}
+     * ({@code uploadFields}, computado pelo processor em compile-time a
+     * partir dos campos publicos desse tipo), so que a fonte do valor e a
+     * parte de arquivo ja extraida pelo adaptador, nao uma {@code String}
+     * de query/form - sem coercao de tipo nenhuma, {@code UploadedFile} e
+     * atribuido diretamente.
+     */
+    public void populateUploads(Object instance, Map<String, UploadedFile> uploads, Set<String> uploadFields) {
+        for (Field field : instance.getClass().getFields()) {
+            if (Modifier.isStatic(field.getModifiers())) {
+                continue;
+            }
+            if (!uploadFields.contains(field.getName()) || !UploadedFile.class.isAssignableFrom(field.getType())) {
+                continue;
+            }
+            UploadedFile file = uploads.get(field.getName());
+            if (file == null) {
+                continue;
+            }
+            try {
+                field.set(instance, file);
+            } catch (IllegalAccessException e) {
+                throw new IllegalStateException("Nao foi possivel popular o campo de upload '" + field.getName()
+                        + "' em " + instance.getClass().getName(), e);
+            }
         }
     }
 
@@ -417,5 +449,54 @@ public final class ComponentInvoker {
             }
         }
         // sem campo 'session' declarado - ok, e opcional.
+    }
+
+    /**
+     * Popula os campos publicos opcionais {@code flashSuccess}/
+     * {@code flashError} (ver {@link dev.jta.core.ReservedFieldNames}) com
+     * a mensagem de uso unico consumida da sessao pelo chamador ({@code
+     * JtaPageDispatcher}) - mesmo padrao de no-op silencioso de
+     * {@link #applySession}/{@link #applyErrors} para quem nao declarar o
+     * campo. {@code null} e um valor valido (nenhuma flash pendente).
+     */
+    public void applyFlash(Object instance, String flashSuccess, String flashError) {
+        setStringFieldIfPresent(instance, "flashSuccess", flashSuccess);
+        setStringFieldIfPresent(instance, "flashError", flashError);
+    }
+
+    /**
+     * Popula os campos publicos opcionais {@code errorStatus}/
+     * {@code errorPath}/{@code errorDetail} (ver
+     * {@link dev.jta.core.ReservedFieldNames}) de um componente
+     * {@code @ErrorPage} - ver {@code JtaErrorPageRenderer}. Mesmo padrao
+     * de no-op silencioso: um componente de erro so precisa declarar os
+     * campos que o template realmente usa.
+     */
+    public void applyErrorInfo(Object instance, int errorStatus, String errorPath, String errorDetail) {
+        setStringFieldIfPresent(instance, "errorPath", errorPath);
+        setStringFieldIfPresent(instance, "errorDetail", errorDetail);
+        for (Field field : instance.getClass().getFields()) {
+            if (field.getName().equals("errorStatus") && (field.getType() == int.class || field.getType() == Integer.class)) {
+                try {
+                    field.set(instance, errorStatus);
+                } catch (IllegalAccessException e) {
+                    throw new IllegalStateException("Nao foi possivel popular o campo 'errorStatus' em " + instance.getClass().getName(), e);
+                }
+                return;
+            }
+        }
+    }
+
+    private void setStringFieldIfPresent(Object instance, String name, String value) {
+        for (Field field : instance.getClass().getFields()) {
+            if (field.getName().equals(name) && field.getType() == String.class) {
+                try {
+                    field.set(instance, value);
+                } catch (IllegalAccessException e) {
+                    throw new IllegalStateException("Nao foi possivel popular o campo '" + name + "' em " + instance.getClass().getName(), e);
+                }
+                return;
+            }
+        }
     }
 }

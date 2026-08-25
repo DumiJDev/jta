@@ -6,6 +6,7 @@ import dev.jta.core.Redirect;
 import dev.jta.runtime.csrf.CsrfRequest;
 import dev.jta.runtime.csrf.CsrfTokenStore;
 import dev.jta.runtime.session.JtaSession;
+import dev.jta.runtime.upload.UploadedFile;
 import gg.jte.TemplateEngine;
 import gg.jte.output.StringOutput;
 import jakarta.validation.Validator;
@@ -64,6 +65,19 @@ public final class JtaActionDispatcher {
 
     public ActionResult dispatch(String selector, String action, Map<String, String[]> params, CurrentUser user,
                                   JtaSession session, CsrfRequest csrf) {
+        return dispatch(selector, action, params, user, session, csrf, Map.of());
+    }
+
+    /**
+     * Sobrecarga com os arquivos de upload ja extraidos pelo adaptador
+     * (partes de uma requisicao {@code multipart/form-data} - ver
+     * {@code ComponentMetadata#uploadFields}). A sobrecarga sem este
+     * parametro (acima) delega aqui com {@code Map.of()}, preservando o
+     * comportamento exato de antes desta feature para quem nao precisa
+     * dela.
+     */
+    public ActionResult dispatch(String selector, String action, Map<String, String[]> params, CurrentUser user,
+                                  JtaSession session, CsrfRequest csrf, Map<String, UploadedFile> uploads) {
         ComponentMetadata metadata = registry.bySelector(selector);
 
         if (!metadata.csrfExempt() && !csrfTokenStore.verify(csrf.cookieHeader(), csrf.headerValue())) {
@@ -106,6 +120,7 @@ public final class JtaActionDispatcher {
         }
 
         invoker.populateFromParams(instance, params, Set.copyOf(metadata.bindableFields()));
+        invoker.populateUploads(instance, uploads, Set.copyOf(metadata.uploadFields()));
         invoker.applySession(instance, session);
         invoker.callInitIfPresent(instance);
 
@@ -119,6 +134,7 @@ public final class JtaActionDispatcher {
             try {
                 invoker.invokeAction(instance, action, actionArgs);
             } catch (Redirect redirect) {
+                FlashSupport.store(session, redirect);
                 return new ActionResult.Redirect(redirect.path());
             }
         }

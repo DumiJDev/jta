@@ -1,13 +1,17 @@
 package dev.jta.spring;
 
+import dev.jta.runtime.JtaErrorPageRenderer;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;
+import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.AccessDeniedException;
 import org.springframework.security.core.AuthenticationException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
+
+import java.util.Optional;
 
 /**
  * Captura exceções internas do JTA (reflection de {@link JtaComponentInvoker},
@@ -36,10 +40,16 @@ class JtaExceptionHandler {
 
     private static final Logger LOG = LoggerFactory.getLogger(JtaExceptionHandler.class);
 
+    private final JtaErrorPageRenderer errorPageRenderer;
+
+    JtaExceptionHandler(JtaErrorPageRenderer errorPageRenderer) {
+        this.errorPageRenderer = errorPageRenderer;
+    }
+
     @ExceptionHandler(IllegalArgumentException.class)
-    ResponseEntity<Void> handleBadRequest(IllegalArgumentException e) {
+    ResponseEntity<String> handleBadRequest(IllegalArgumentException e) {
         LOG.warn("Requisicao JTA invalida", e);
-        return ResponseEntity.status(HttpStatus.BAD_REQUEST).build();
+        return errorResponse(HttpStatus.BAD_REQUEST);
     }
 
     /**
@@ -85,8 +95,23 @@ class JtaExceptionHandler {
      * {@code @RestController} do proprio consumidor ficam intocados.
      */
     @ExceptionHandler(Exception.class)
-    ResponseEntity<Void> handleServerError(Exception e) {
+    ResponseEntity<String> handleServerError(Exception e) {
         LOG.error("Falha interna ao processar requisicao JTA", e);
-        return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).build();
+        return errorResponse(HttpStatus.INTERNAL_SERVER_ERROR);
+    }
+
+    /**
+     * Renderiza o componente {@code @ErrorPage} registrado para
+     * {@code status}, se algum - ver {@link JtaErrorPageRenderer}. Sem
+     * nenhum componente registrado para o status, cai no comportamento
+     * pre-existente (corpo vazio) - puramente aditivo, zero regressao para
+     * quem nao usa esta feature.
+     */
+    private ResponseEntity<String> errorResponse(HttpStatus status) {
+        Optional<String> html = errorPageRenderer.render(status.value(), null, null);
+        if (html.isEmpty()) {
+            return ResponseEntity.status(status).build();
+        }
+        return ResponseEntity.status(status).contentType(MediaType.TEXT_HTML).body(html.get());
     }
 }

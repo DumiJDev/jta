@@ -70,6 +70,23 @@ public final class TemplateTransformer {
     private static final Pattern CHILD_TAG =
             Pattern.compile("<([a-zA-Z][a-zA-Z0-9]*(?:-[a-zA-Z0-9]+)+)((?:\\s+[^<>]*?)?)\\s*/>");
 
+    // <minha-tag [prop]="expr" ...>conteudo para o slot default</minha-tag> -
+    // forma ABERTA (nao auto-fechada) de uma tag de componente filho, usada
+    // para passar conteudo projetado (ver transformChildTagsWithBody). MVP
+    // deliberado: so o slot default (sem [slot="nome"] para slots
+    // nomeados), e sem suporte a um filho do MESMO nome aninhado dentro do
+    // proprio corpo (o "(?:(?!</?\\1\\b).)*?" abaixo evita casar ate o
+    // </tag> de um filho igual aninhado, mas nao suporta profundidade > 1).
+    private static final Pattern CHILD_TAG_WITH_BODY =
+            Pattern.compile("<([a-zA-Z][a-zA-Z0-9]*(?:-[a-zA-Z0-9]+)+)((?:\\s+[^<>]*?)?)\\s*>((?:(?!</?\\1\\b).)*?)</\\1\\s*>", Pattern.DOTALL);
+
+    // <slot/>, <slot></slot> ou <slot>conteudo de fallback</slot> - marcador
+    // de onde o conteudo projetado por um componente PAI entra no template
+    // deste componente (ver CHILD_TAG_WITH_BODY). MVP deliberado: um unico
+    // slot "default" por componente, sem slots nomeados nesta versao.
+    private static final Pattern SLOT_TAG =
+            Pattern.compile("<slot\\s*(?:/>|>([\\s\\S]*?)</slot\\s*>)");
+
     // [titulo]="expr" dentro do texto de atributos de uma CHILD_TAG
     private static final Pattern INPUT_BINDING = Pattern.compile("\\[([a-zA-Z_][a-zA-Z0-9_]*)]=\"([^\"]*)\"");
 
@@ -91,7 +108,8 @@ public final class TemplateTransformer {
     private static final Pattern LITERAL_BOOLEAN = Pattern.compile("^(true|false)$");
 
     public record Result(String generatedJte, List<String> boundActions, List<ValidationError> errors,
-                  List<String> referencedFields, List<String> children) {
+                  List<String> referencedFields, List<String> children, boolean hasSlot,
+                  List<ValidationError> warnings) {
         public boolean hasErrors() {
             return !errors.isEmpty();
         }
@@ -103,8 +121,17 @@ public final class TemplateTransformer {
     /**
      * Descreve um filho ja resolvido (por selector canonico ou alias
      * {@code @Use}) que pode ser referenciado no template do consumidor.
+     *
+     * @param hasSlot true se o template do filho declara {@code <slot/>} -
+     *                so conhecido para filhos do MESMO modulo (ver
+     *                {@code JtaAnnotationProcessor#toChildRef}); para um
+     *                filho de outro modulo/jar cujo template nao pode ser
+     *                relido em compile-time (ex: {@code templateUrl}
+     *                externo), fica {@code false} por melhor esforco - o
+     *                pior caso e um aviso "conteudo pode ser ignorado" que
+     *                pode ser falso-positivo, nunca um erro de build.
      */
-    public record ChildRef(String fqn, String canonicalSelector, Set<String> inputFields, boolean isLayout) {
+    public record ChildRef(String fqn, String canonicalSelector, Set<String> inputFields, boolean isLayout, boolean hasSlot) {
     }
 
     /** Uma regiao de texto onde {@code varName} e uma variavel de loop valida. */
@@ -128,6 +155,18 @@ public final class TemplateTransformer {
             names.add(m.group(1));
         }
         return names;
+    }
+
+    /**
+     * {@code true} se {@code rawTemplate} declara {@code <slot/>} - usado
+     * pelo {@code JtaAnnotationProcessor} para (1) decidir se o {@code .jte}
+     * gerado deste componente precisa do {@code @param gg.jte.Content}
+     * extra, e (2) "espiar" (sem processar de verdade) se um FILHO
+     * conhecido no modulo declara slot, para o aviso de conteudo projetado
+     * sem slot para recebe-lo (ver {@link ChildRef#hasSlot()}).
+     */
+    public static boolean scanHasSlot(String rawTemplate) {
+        return SLOT_TAG.matcher(rawTemplate).find();
     }
 
     /**
@@ -203,6 +242,7 @@ public final class TemplateTransformer {
                              Set<String> nullableFields, Set<String> messageKeys,
                              Map<String, ChildRef> knownChildTags) {
         List<ValidationError> errors = new ArrayList<>();
+        List<ValidationError> warnings = new ArrayList<>();
         List<String> boundActions = new ArrayList<>();
         List<String> children = new ArrayList<>();
         java.util.Set<String> referencedFields = new java.util.LinkedHashSet<>();
@@ -210,15 +250,46 @@ public final class TemplateTransformer {
         validateRootIsNotChildTag(rawTemplate, knownChildTags, errors);
         validateLoopVariableShadowing(rawTemplate, knownFields, errors);
 
+        boolean hasSlot = scanHasSlot(rawTemplate);
+
         String withScope = injectScopeAttribute(rawTemplate, selector);
-        String withChildren = transformChildTags(withScope, knownFields, knownMethods, knownChildTags, errors, children);
+        String withSlot = transformSlotTag(withScope);
+        String withChildBodies = transformChildTagsWithBody(withSlot, knownFields, knownMethods, nullableFields,
+                messageKeys, knownChildTags, errors, warnings, children);
+        String withChildren = transformChildTags(withChildBodies, knownFields, knownMethods, knownChildTags, errors, children);
         String withEvents = transformEventBindings(withChildren, selector, knownActions, boundActions, errors, knownFields, knownMethods);
         String withTranslations = transformTranslations(withEvents, messageKeys, errors);
         String jte = transformInterpolations(withTranslations, knownFields, knownMethods, nullableFields, errors, referencedFields);
 
         validateNoStrayAtSigns(jte, errors);
 
-        return new Result(jte, boundActions, errors, List.copyOf(referencedFields), List.copyOf(children));
+        return new Result(jte, boundActions, errors, List.copyOf(referencedFields), List.copyOf(children), hasSlot, warnings);
+    }
+
+    /**
+     * Substitui {@code <slot/>}/{@code <slot>fallback</slot>} por um
+     * {@code @if/@else/@endif} do proprio JTE que escolhe entre o
+     * {@code gg.jte.Content} passado pelo PAI ({@code __jtaSlotDefault},
+     * um {@code @param} extra que {@code JtaAnnotationProcessor} so
+     * adiciona ao cabecalho quando {@link #scanHasSlot} for {@code true} -
+     * ver {@code jteHeader}) e o conteudo de fallback declarado aqui
+     * (renderizado como o resto do template: as demais passagens desta
+     * classe rodam DEPOIS desta, entao {{ }}/tags-filho dentro do fallback
+     * continuam sendo transformados normalmente). Roda ANTES da injecao de
+     * escopo interferir com outra coisa - na verdade roda logo depois dela,
+     * sem nenhuma dependencia real de ordem com as passagens seguintes.
+     */
+    private static String transformSlotTag(String template) {
+        Matcher m = SLOT_TAG.matcher(template);
+        StringBuilder out = new StringBuilder();
+        while (m.find()) {
+            String fallback = m.group(1) == null ? "" : m.group(1);
+            String replacement = "@if(__jtaSlotDefault != null)${__jtaSlotDefault}@else "
+                    + fallback + " @endif";
+            m.appendReplacement(out, Matcher.quoteReplacement(replacement));
+        }
+        m.appendTail(out);
+        return out.toString();
     }
 
     private static void validateRootIsNotChildTag(String rawTemplate, Map<String, ChildRef> knownChildTags,
@@ -249,7 +320,7 @@ public final class TemplateTransformer {
     // (ex: "Missing @endfor" apontando pra um arquivo gerado que o dev nunca
     // escreveu). Ver JtaAnnotationProcessor/TROUBLESHOOTING.md.
     private static final Pattern KNOWN_JTE_DIRECTIVE = Pattern.compile(
-            "@(if\\(|elseif\\(|else\\b|endif\\b|for\\(|endfor\\b|raw\\b|endraw\\b|import\\s|param\\s|template\\.|tag\\.|layout\\.)");
+            "@(if\\(|elseif\\(|else\\b|endif\\b|for\\(|endfor\\b|raw\\b|endraw\\b|import\\s|param\\s|template\\.|tag\\.|layout\\.|`)");
 
     private static void validateNoStrayAtSigns(String jte, List<ValidationError> errors) {
         int index = jte.indexOf('@');
@@ -620,49 +691,166 @@ public final class TemplateTransformer {
                 continue;
             }
 
-            Map<String, String> inputs = new LinkedHashMap<>();
-            Matcher bindM = INPUT_BINDING.matcher(attrText);
-            while (bindM.find()) {
-                String inputName = bindM.group(1);
-                String rawValue = bindM.group(2).trim();
-                // aceita tanto a forma crua ("tituloDaLista") quanto envolvida
-                // em chaves duplas ("{{ true }}") - mesma gramatica de raiz,
-                // so uma variacao de escrita permitida por conveniencia.
-                if (rawValue.startsWith("{{") && rawValue.endsWith("}}")) {
-                    rawValue = rawValue.substring(2, rawValue.length() - 2).trim();
-                }
-
-                if (!child.inputFields().contains(inputName)) {
-                    errors.add(new ValidationError("unknown-input", inputName,
-                            "'[" + inputName + "]' em <" + tagName + "/> nao corresponde a nenhum campo @Input de "
-                                    + child.fqn() + DidYouMean.suggest(inputName, child.inputFields())));
-                    continue;
-                }
-
-                String javaExpr = resolveInputExpression(rawValue, offset, knownFields, knownMethods, loopScopes, errors, tagName, inputName);
-                inputs.put(inputName, javaExpr);
-            }
+            Map<String, String> inputs = parseInputBindings(attrText, offset, child, tagName, knownFields, knownMethods, loopScopes, errors);
 
             childrenOut.add(child.fqn());
-            if (seenChildren.add(child.fqn())) {
-                // nada extra a fazer - so para deduplicar children() na metadata
+            seenChildren.add(child.fqn());
+
+            String replacement = buildChildCallExpr(child, inputs, null);
+            m.appendReplacement(out, Matcher.quoteReplacement(replacement));
+        }
+        m.appendTail(out);
+        return out.toString();
+    }
+
+    private static Map<String, String> parseInputBindings(String attrText, int offset, ChildRef child, String tagName,
+                                                            Set<String> knownFields, Set<String> knownMethods,
+                                                            List<LoopScope> loopScopes, List<ValidationError> errors) {
+        Map<String, String> inputs = new LinkedHashMap<>();
+        Matcher bindM = INPUT_BINDING.matcher(attrText);
+        while (bindM.find()) {
+            String inputName = bindM.group(1);
+            String rawValue = bindM.group(2).trim();
+            // aceita tanto a forma crua ("tituloDaLista") quanto envolvida
+            // em chaves duplas ("{{ true }}") - mesma gramatica de raiz,
+            // so uma variacao de escrita permitida por conveniencia.
+            if (rawValue.startsWith("{{") && rawValue.endsWith("}}")) {
+                rawValue = rawValue.substring(2, rawValue.length() - 2).trim();
             }
 
-            StringBuilder inputsJava = new StringBuilder();
-            int i = 0;
-            for (Map.Entry<String, String> e : inputs.entrySet()) {
-                if (i > 0) {
-                    inputsJava.append(", ");
+            if (!child.inputFields().contains(inputName)) {
+                errors.add(new ValidationError("unknown-input", inputName,
+                        "'[" + inputName + "]' em <" + tagName + "/> nao corresponde a nenhum campo @Input de "
+                                + child.fqn() + DidYouMean.suggest(inputName, child.inputFields())));
+                continue;
+            }
+
+            String javaExpr = resolveInputExpression(rawValue, offset, knownFields, knownMethods, loopScopes, errors, tagName, inputName);
+            inputs.put(inputName, javaExpr);
+        }
+        return inputs;
+    }
+
+    /**
+     * Monta a chamada {@code @template.FilhoFqn(...)} de composicao -
+     * compartilhada entre a forma auto-fechada ({@link #transformChildTags})
+     * e a forma com corpo/slot ({@link #transformChildTagsWithBody}).
+     *
+     * <p>Quando {@code slotContentExpr} e {@code null}, a chamada continua
+     * inteiramente POSICIONAL (self, __jtaInvoker), exatamente como antes
+     * desta feature - zero mudanca de comportamento/saida gerada para
+     * quem nao usa slots. Só quando ha conteudo de slot a passar a chamada
+     * vira NOMEADA (self = ..., __jtaInvoker = ..., __jtaSlotDefault = ...) -
+     * a forma que o JTE exige para poder omitir/prover parametros com
+     * default fora de ordem posicional.
+     */
+    private static String buildChildCallExpr(ChildRef child, Map<String, String> inputs, String slotContentExpr) {
+        StringBuilder inputsJava = new StringBuilder();
+        int i = 0;
+        for (Map.Entry<String, String> e : inputs.entrySet()) {
+            if (i > 0) {
+                inputsJava.append(", ");
+            }
+            inputsJava.append("java.util.Map.entry(\"").append(e.getKey()).append("\", (Object)(").append(e.getValue()).append("))");
+            i++;
+        }
+        String inputsMapExpr = inputs.isEmpty()
+                ? "java.util.Map.<String,Object>of()"
+                : "java.util.Map.<String,Object>ofEntries(" + inputsJava + ")";
+
+        String instantiateExpr = "(" + child.fqn() + ") __jtaInvoker.instantiateChild(" + child.fqn() + ".class, " + inputsMapExpr + ")";
+
+        if (slotContentExpr == null) {
+            return "@template." + child.fqn() + "(" + instantiateExpr + ", __jtaInvoker)";
+        }
+        return "@template." + child.fqn() + "(self = " + instantiateExpr + ", __jtaInvoker = __jtaInvoker, "
+                + "__jtaSlotDefault = " + slotContentExpr + ")";
+    }
+
+    /**
+     * Substitui cada tag de componente filho em forma ABERTA
+     * ({@code <tag>...</tag>}, ver {@link #CHILD_TAG_WITH_BODY}) pela
+     * mesma chamada de composicao de {@link #transformChildTags}, mas
+     * passando o corpo como conteudo de slot ({@code gg.jte.Content}, via
+     * {@code @`...`}) - roda ANTES de {@link #transformChildTags} para que
+     * a forma auto-fechada (sem {@code /} obrigatorio aqui) nao rouba
+     * estas ocorrencias.
+     *
+     * <p>O corpo e recursivamente transformado (tags-filho aninhadas,
+     * traducao, interpolacao) contra os campos/metodos/acoes do
+     * consumidor (PAI) - conteudo projetado se comporta como se estivesse
+     * escrito diretamente no template do pai, nao no do filho. Event
+     * bindings ({@code (evento)="..."}) NAO sao suportados dentro de
+     * conteudo de slot nesta versao (ver erro abaixo): o alvo de
+     * {@code hx-target="closest [data-jta-component]"} gerado resolveria
+     * para a raiz do FILHO (onde o conteudo e fisicamente renderizado no
+     * DOM), nao a do pai que declara a acao - um bug de swap silencioso,
+     * nao uma limitacao cosmetica.
+     */
+    private static String transformChildTagsWithBody(String template, Set<String> knownFields, Set<String> knownMethods,
+                                                       Set<String> nullableFields, Set<String> messageKeys,
+                                                       Map<String, ChildRef> knownChildTags, List<ValidationError> errors,
+                                                       List<ValidationError> warnings, List<String> childrenOut) {
+        List<LoopScope> loopScopes = scanLoopScopes(template);
+        Matcher m = CHILD_TAG_WITH_BODY.matcher(template);
+        StringBuilder out = new StringBuilder();
+        while (m.find()) {
+            String tagName = m.group(1);
+            String attrText = m.group(2) == null ? "" : m.group(2);
+            String body = m.group(3) == null ? "" : m.group(3);
+            int offset = m.start();
+
+            if ("router-outlet".equals(tagName)) {
+                continue; // deixa para substituteRouterOutlet - mesma excecao de transformChildTags
+            }
+            ChildRef child = knownChildTags.get(tagName);
+            if (child == null) {
+                errors.add(new ValidationError("child-tag", tagName,
+                        "tag de componente filho '<" + tagName + ">...</" + tagName + ">' nao resolvida - nao e um "
+                                + "selector conhecido neste modulo nem um alias @Use declarado nesta classe"
+                                + DidYouMean.suggest(tagName, knownChildTags.keySet())));
+                m.appendReplacement(out, Matcher.quoteReplacement(""));
+                continue;
+            }
+            if (child.isLayout()) {
+                errors.add(new ValidationError("child-is-layout", tagName,
+                        "'<" + tagName + ">...</" + tagName + ">' resolve para " + child.fqn() + ", que e um "
+                                + "@Layout - layouts nao podem ser usados como componente filho aninhado."));
+                m.appendReplacement(out, Matcher.quoteReplacement(""));
+                continue;
+            }
+
+            Map<String, String> inputs = parseInputBindings(attrText, offset, child, tagName, knownFields, knownMethods, loopScopes, errors);
+
+            childrenOut.add(child.fqn());
+
+            String slotContentExpr = null;
+            if (!body.isBlank()) {
+                if (EVENT_BINDING.matcher(body).find()) {
+                    errors.add(new ValidationError("slot-event-binding", tagName,
+                            "'<" + tagName + ">...</" + tagName + ">' - conteudo de slot nao pode conter "
+                                    + "(evento)=\"...\": o alvo de swap resolveria para a raiz do componente FILHO, "
+                                    + "nao a deste componente. Mova a acao para fora do slot, ou exponha um metodo "
+                                    + "de template para a logica precisada aqui."));
+                } else {
+                    if (!child.hasSlot()) {
+                        warnings.add(new ValidationError("unused-slot-content", tagName,
+                                "'<" + tagName + ">...</" + tagName + ">' passa conteudo, mas " + child.fqn()
+                                        + " nao declara nenhum <slot/> no seu template (ou o slot nao pode ser "
+                                        + "confirmado em compile-time, se o filho vem de outro modulo) - este "
+                                        + "conteudo pode ser ignorado em runtime."));
+                    }
+                    List<String> fragmentChildren = new ArrayList<>();
+                    String fragment = transformChildTags(body, knownFields, knownMethods, knownChildTags, errors, fragmentChildren);
+                    childrenOut.addAll(fragmentChildren);
+                    fragment = transformTranslations(fragment, messageKeys, errors);
+                    java.util.Set<String> ignoredRefs = new java.util.LinkedHashSet<>();
+                    fragment = transformInterpolations(fragment, knownFields, knownMethods, nullableFields, errors, ignoredRefs);
+                    slotContentExpr = "@`" + fragment + "`";
                 }
-                inputsJava.append("java.util.Map.entry(\"").append(e.getKey()).append("\", (Object)(").append(e.getValue()).append("))");
-                i++;
             }
-            String inputsMapExpr = inputs.isEmpty()
-                    ? "java.util.Map.<String,Object>of()"
-                    : "java.util.Map.<String,Object>ofEntries(" + inputsJava + ")";
 
-            String replacement = "@template." + child.fqn() + "((" + child.fqn() + ") __jtaInvoker.instantiateChild("
-                    + child.fqn() + ".class, " + inputsMapExpr + "), __jtaInvoker)";
+            String replacement = buildChildCallExpr(child, inputs, slotContentExpr);
             m.appendReplacement(out, Matcher.quoteReplacement(replacement));
         }
         m.appendTail(out);

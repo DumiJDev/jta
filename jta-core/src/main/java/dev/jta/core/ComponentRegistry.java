@@ -124,4 +124,20 @@ public final class ComponentRegistry {
     public List<ComponentMetadata> all() {
         return List.copyOf(bySelector.values());
     }
+
+    /**
+     * Componente registrado via {@code @ErrorPage(status)} para o status
+     * HTTP dado, se algum - ver {@code JtaErrorPageRenderer} (jta-runtime).
+     * Quando mais de um componente reivindica o mesmo status (nao detectado
+     * em compile-time, ja que dois modulos independentes podem cada um
+     * declarar {@code @ErrorPage(404)} sem se conhecerem), o primeiro
+     * encontrado ganha - mesmo espirito "melhor esforco" de outras
+     * agregacoes entre jars nesta classe.
+     */
+    public java.util.Optional<ComponentMetadata> errorPage(int status) {
+        return bySelector.values().stream()
+                .filter(ComponentMetadata::isErrorPage)
+                .filter(m -> m.errorPageStatus() == status)
+                .findFirst();
+    }
 }
