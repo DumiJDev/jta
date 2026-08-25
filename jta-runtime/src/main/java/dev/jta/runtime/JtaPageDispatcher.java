@@ -3,6 +3,8 @@ package dev.jta.runtime;
 import dev.jta.core.ComponentMetadata;
 import dev.jta.core.ComponentRegistry;
 import dev.jta.core.JtaConfig;
+import dev.jta.core.LocaleContext;
+import dev.jta.core.LocaleResolver;
 import gg.jte.TemplateEngine;
 import gg.jte.output.StringOutput;
 
@@ -37,17 +39,45 @@ public final class JtaPageDispatcher {
     private final ComponentInvoker invoker;
     private final TemplateEngine templateEngine;
     private final JtaConfig config;
+    private final LocaleResolver localeResolver;
 
     public JtaPageDispatcher(ComponentRegistry registry, ComponentInvoker invoker, TemplateEngine templateEngine,
                               JtaConfig config) {
+        this(registry, invoker, templateEngine, config, LocaleResolver.acceptLanguageOrDefault());
+    }
+
+    public JtaPageDispatcher(ComponentRegistry registry, ComponentInvoker invoker, TemplateEngine templateEngine,
+                              JtaConfig config, LocaleResolver localeResolver) {
         this.registry = registry;
         this.invoker = invoker;
         this.templateEngine = templateEngine;
         this.config = config;
+        this.localeResolver = localeResolver;
     }
 
     public PageResult dispatch(ComponentMetadata metadata, Map<String, String[]> queryParams,
                                 Map<String, String> pathVariables, CurrentUser user) {
+        return dispatch(metadata, queryParams, pathVariables, user, null);
+    }
+
+    /**
+     * @param acceptLanguageHeader valor bruto do header HTTP {@code Accept-Language}
+     *                             da requisicao, ou {@code null} se ausente/o
+     *                             adaptador ainda nao repassa esse dado - ver
+     *                             {@link JtaActionDispatcher#dispatch(String, String, Map, CurrentUser, String)}.
+     */
+    public PageResult dispatch(ComponentMetadata metadata, Map<String, String[]> queryParams,
+                                Map<String, String> pathVariables, CurrentUser user, String acceptLanguageHeader) {
+        LocaleContext.set(localeResolver.resolve(acceptLanguageHeader));
+        try {
+            return doDispatch(metadata, queryParams, pathVariables, user);
+        } finally {
+            LocaleContext.clear();
+        }
+    }
+
+    private PageResult doDispatch(ComponentMetadata metadata, Map<String, String[]> queryParams,
+                                   Map<String, String> pathVariables, CurrentUser user) {
         if (!SecurityEnforcer.isAuthorized(metadata, user)) {
             return new PageResult.Forbidden();
         }
@@ -62,10 +92,12 @@ public final class JtaPageDispatcher {
 
         // query params primeiro, path variables por cima (o path e mais
         // especifico que a query string quando os dois definem o mesmo
-        // campo, ja que o path e obrigatorio para a rota ter casado).
+        // campo, ja que o path e obrigatorio para a rota ter casado) -
+        // mesma prioridade vale para erro de conversao no mesmo campo.
         Set<String> bindableFields = Set.copyOf(metadata.bindableFields());
-        invoker.populateFromParams(instance, queryParams, bindableFields);
-        invoker.populateFromPathVariables(instance, pathVariables, bindableFields);
+        Map<String, String> errors = new LinkedHashMap<>(invoker.populateFromParams(instance, queryParams, bindableFields));
+        errors.putAll(invoker.populateFromPathVariables(instance, pathVariables, bindableFields));
+        invoker.applyErrors(instance, errors);
         invoker.callInitIfPresent(instance);
 
         StringOutput pageOutput = new StringOutput();

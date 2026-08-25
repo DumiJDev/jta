@@ -37,7 +37,8 @@ class JtaActionController {
     ResponseEntity<String> handleAction(@PathVariable("selector") String selector,
                                          @RequestParam("action") String action,
                                          HttpServletRequest request) {
-        ActionResult result = dispatcher.dispatch(selector, action, request.getParameterMap(), SpringCurrentUser.current());
+        ActionResult result = dispatcher.dispatch(selector, action, request.getParameterMap(), SpringCurrentUser.current(),
+                request.getHeader("Accept-Language"));
 
         if (result instanceof ActionResult.Forbidden) {
             return ResponseEntity.status(HttpStatus.FORBIDDEN).build();

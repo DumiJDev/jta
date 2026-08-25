@@ -2,11 +2,14 @@ package dev.jta.runtime;
 
 import dev.jta.core.ComponentMetadata;
 import dev.jta.core.ComponentRegistry;
+import dev.jta.core.LocaleContext;
+import dev.jta.core.LocaleResolver;
 import dev.jta.core.Redirect;
 import gg.jte.TemplateEngine;
 import gg.jte.output.StringOutput;
 import jakarta.validation.Validator;
 
+import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Set;
 
@@ -37,16 +40,46 @@ public final class JtaActionDispatcher {
     private final ComponentInvoker invoker;
     private final TemplateEngine templateEngine;
     private final Validator validator;
+    private final LocaleResolver localeResolver;
 
     public JtaActionDispatcher(ComponentRegistry registry, ComponentInvoker invoker, TemplateEngine templateEngine,
                                 Validator validator) {
+        this(registry, invoker, templateEngine, validator, LocaleResolver.acceptLanguageOrDefault());
+    }
+
+    public JtaActionDispatcher(ComponentRegistry registry, ComponentInvoker invoker, TemplateEngine templateEngine,
+                                Validator validator, LocaleResolver localeResolver) {
         this.registry = registry;
         this.invoker = invoker;
         this.templateEngine = templateEngine;
         this.validator = validator;
+        this.localeResolver = localeResolver;
     }
 
     public ActionResult dispatch(String selector, String action, Map<String, String[]> params, CurrentUser user) {
+        return dispatch(selector, action, params, user, null);
+    }
+
+    /**
+     * @param acceptLanguageHeader valor bruto do header HTTP {@code Accept-Language}
+     *                             da requisicao, ou {@code null} se ausente/o
+     *                             adaptador ainda nao repassa esse dado -
+     *                             resolvido via {@link LocaleResolver} e
+     *                             publicado em {@link LocaleContext} durante
+     *                             toda a duracao desta chamada (ver
+     *                             {@code Translations#translate}).
+     */
+    public ActionResult dispatch(String selector, String action, Map<String, String[]> params, CurrentUser user,
+                                  String acceptLanguageHeader) {
+        LocaleContext.set(localeResolver.resolve(acceptLanguageHeader));
+        try {
+            return doDispatch(selector, action, params, user);
+        } finally {
+            LocaleContext.clear();
+        }
+    }
+
+    private ActionResult doDispatch(String selector, String action, Map<String, String[]> params, CurrentUser user) {
         ComponentMetadata metadata = registry.bySelector(selector);
         if (!SecurityEnforcer.isAuthorized(metadata, user)) {
             return new ActionResult.Forbidden();
@@ -68,15 +101,25 @@ public final class JtaActionDispatcher {
             throw new IllegalStateException("Classe do componente nao encontrada: " + metadata.fqn(), e);
         }
 
-        invoker.populateFromParams(instance, params, Set.copyOf(metadata.bindableFields()));
+        // erros de conversao (ex: 'abc' para um campo int) entram no mesmo
+        // mapa que violacoes de Bean Validation - nunca mais propagam crus
+        // (ver ComponentInvoker#setField/ConverterRegistry).
+        Map<String, String> conversionErrors = invoker.populateFromParams(instance, params, Set.copyOf(metadata.bindableFields()));
         invoker.callInitIfPresent(instance);
 
-        Map<String, String> errors = validator != null ? invoker.validate(instance, validator) : Map.of();
+        Map<String, String> validationErrors = validator != null ? invoker.validate(instance, validator) : Map.of();
+
+        Map<String, String> errors = new LinkedHashMap<>(validationErrors);
+        // erro de conversao prevalece sobre erro de validacao no mesmo
+        // campo: se o valor nem chegou a virar um dado valido, a mensagem
+        // mais util pro usuario e a de conversao, nao a da constraint
+        // (que rodou contra o valor default do campo).
+        errors.putAll(conversionErrors);
         invoker.applyErrors(instance, errors);
 
-        // so invoca a acao se a validacao passou (ou se nao ha validator
-        // configurado, ou seja, o dev nao optou por validacao nenhuma) -
-        // dados invalidos nunca chegam ao codigo da acao.
+        // so invoca a acao se a validacao/conversao passou (ou se nao ha
+        // validator configurado, ou seja, o dev nao optou por validacao
+        // nenhuma) - dados invalidos nunca chegam ao codigo da acao.
         if (errors.isEmpty()) {
             try {
                 invoker.invokeAction(instance, action);

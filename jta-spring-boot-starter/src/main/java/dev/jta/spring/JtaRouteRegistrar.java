@@ -100,7 +100,8 @@ class JtaRouteRegistrar implements InitializingBean {
         Map<String, String> pathVariables =
                 (Map<String, String>) request.getAttribute(HandlerMapping.URI_TEMPLATE_VARIABLES_ATTRIBUTE);
 
-        PageResult result = dispatcher.dispatch(metadata, request.getParameterMap(), pathVariables, SpringCurrentUser.current());
+        PageResult result = dispatcher.dispatch(metadata, request.getParameterMap(), pathVariables, SpringCurrentUser.current(),
+                request.getHeader("Accept-Language"));
 
         if (result instanceof PageResult.Forbidden) {
             return ResponseEntity.status(HttpStatus.FORBIDDEN).build();

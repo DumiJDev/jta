@@ -3,6 +3,7 @@ package dev.jta.processor;
 import dev.jta.core.AComponent;
 import dev.jta.core.ComponentMetadata;
 import dev.jta.core.ComponentMetadataIo;
+import dev.jta.core.ConverterRegistry;
 import dev.jta.core.JtaConfig;
 import dev.jta.core.Layout;
 import dev.jta.core.AllowAnonymous;
@@ -23,6 +24,9 @@ import javax.lang.model.element.ElementKind;
 import javax.lang.model.element.ExecutableElement;
 import javax.lang.model.element.Modifier;
 import javax.lang.model.element.TypeElement;
+import javax.lang.model.element.VariableElement;
+import javax.lang.model.type.ArrayType;
+import javax.lang.model.type.DeclaredType;
 import javax.lang.model.type.MirroredTypeException;
 import javax.lang.model.type.TypeKind;
 import javax.lang.model.type.TypeMirror;
@@ -34,6 +38,7 @@ import java.io.IOException;
 import java.io.Writer;
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
@@ -260,6 +265,10 @@ public class JtaAnnotationProcessor extends AbstractProcessor {
             }
         }
 
+        if (!validateBindableFieldTypes(bindableFields, known.fieldElements(), type)) {
+            return;
+        }
+
         allMetadata.add(new ComponentMetadata(
                 fqn, selector, explicit, routePath, List.copyOf(known.actions()), generatedRelativePath,
                 scopedCss, false, layoutFqn, security.roles(), security.allowAnonymous(), ssePath, sseIntervalMillis,
@@ -421,7 +430,8 @@ public class JtaAnnotationProcessor extends AbstractProcessor {
     }
 
     private record FieldsAndMethods(Set<String> fields, Set<String> templateMethods, Set<String> actions,
-                                     Set<String> nullableFields, Set<String> explicitlyBindableFields) {
+                                     Set<String> nullableFields, Set<String> explicitlyBindableFields,
+                                     Map<String, VariableElement> fieldElements) {
     }
 
     private FieldsAndMethods collectFieldsAndMethods(TypeElement type) {
@@ -430,13 +440,16 @@ public class JtaAnnotationProcessor extends AbstractProcessor {
         Set<String> actions = new LinkedHashSet<>();
         Set<String> nullableFields = new LinkedHashSet<>();
         Set<String> explicitlyBindableFields = new LinkedHashSet<>();
+        Map<String, VariableElement> fieldElements = new LinkedHashMap<>();
 
         for (Element member : type.getEnclosedElements()) {
             if (member.getModifiers().contains(Modifier.STATIC)) {
                 continue;
             }
             if (member.getKind() == ElementKind.FIELD && member.getModifiers().contains(Modifier.PUBLIC)) {
-                fields.add(member.getSimpleName().toString());
+                VariableElement field = (VariableElement) member;
+                fields.add(field.getSimpleName().toString());
+                fieldElements.put(field.getSimpleName().toString(), field);
                 if (hasAnnotationNamed(member, "Nullable")) {
                     nullableFields.add(member.getSimpleName().toString());
                 }
@@ -455,7 +468,76 @@ public class JtaAnnotationProcessor extends AbstractProcessor {
                 }
             }
         }
-        return new FieldsAndMethods(fields, templateMethods, actions, nullableFields, explicitlyBindableFields);
+        return new FieldsAndMethods(fields, templateMethods, actions, nullableFields, explicitlyBindableFields, fieldElements);
+    }
+
+    /**
+     * Verifica se {@code type} e um tipo que {@link ConverterRegistry} sabe
+     * converter de {@code String} em runtime - usado para rejeitar em
+     * compile-time um campo bindavel (ver {@link #validateBindableFieldTypes})
+     * de tipo nao suportado, em vez de deixar isso ser ignorado
+     * silenciosamente (comportamento antigo) ou falhar so em runtime.
+     *
+     * <p>Espelha a estrutura de {@link ConverterRegistry#convert}: enums e
+     * {@code List<T>}/{@code T[]}/{@code Optional<T>} sao reconhecidos
+     * estruturalmente (recursivamente, no caso dos tres ultimos, para
+     * aceitar o elemento/valor interno); qualquer outro tipo precisa
+     * bater com um nome em {@link ConverterRegistry#SUPPORTED_SIMPLE_TYPE_NAMES}
+     * - a mesma constante que o registro usa para registrar seus
+     * conversores default, entao as duas listas nunca podem divergir.
+     */
+    private boolean isSupportedFieldType(TypeMirror type) {
+        if (type.getKind().isPrimitive()) {
+            return ConverterRegistry.SUPPORTED_SIMPLE_TYPE_NAMES.contains(type.toString());
+        }
+        if (type.getKind() == TypeKind.ARRAY) {
+            return isSupportedFieldType(((ArrayType) type).getComponentType());
+        }
+        if (type.getKind() == TypeKind.DECLARED) {
+            DeclaredType declaredType = (DeclaredType) type;
+            TypeElement element = (TypeElement) declaredType.asElement();
+            if (element.getKind() == ElementKind.ENUM) {
+                return true;
+            }
+            String qualifiedName = element.getQualifiedName().toString();
+            if (qualifiedName.equals("java.util.List") || qualifiedName.equals("java.util.Optional")) {
+                List<? extends TypeMirror> typeArgs = declaredType.getTypeArguments();
+                return typeArgs.size() == 1 && isSupportedFieldType(typeArgs.get(0));
+            }
+            return ConverterRegistry.SUPPORTED_SIMPLE_TYPE_NAMES.contains(qualifiedName);
+        }
+        return false;
+    }
+
+    /**
+     * Emite {@code ERROR} para cada campo em {@code bindableFields} cujo
+     * tipo {@link #isSupportedFieldType} rejeita - so os campos
+     * efetivamente bindaveis (referenciados no template, {@code @Bindable}
+     * explicito, ou parametro de rota) sao verificados, nunca todo campo
+     * publico da classe: um campo publico nao-bindavel (ex: {@code Map<String,String> errors},
+     * populado por {@link dev.jta.core.ComponentMetadata}/{@code ComponentInvoker#applyErrors},
+     * nao por bind de query param) e legitimamente de um tipo que
+     * {@link ConverterRegistry} nao precisa converter, e nunca passa por
+     * {@code ComponentInvoker#populateFromParams} em runtime.
+     */
+    private boolean validateBindableFieldTypes(Set<String> bindableFields, Map<String, VariableElement> fieldElements, TypeElement type) {
+        boolean valid = true;
+        for (String name : bindableFields) {
+            VariableElement field = fieldElements.get(name);
+            if (field == null) {
+                continue; // nao deveria acontecer - bindableFields e sempre um subconjunto de fieldElements.keySet()
+            }
+            if (!isSupportedFieldType(field.asType())) {
+                messager.printMessage(Diagnostic.Kind.ERROR,
+                        "[JTA] campo bindavel '" + name + "' tem tipo nao suportado (" + field.asType() + ") - "
+                                + "tipos aceitos para binding automatico de query params/path variables: String, "
+                                + "int/Integer, long/Long, double/Double, boolean/Boolean, BigDecimal, UUID, "
+                                + "LocalDate, LocalDateTime, enums, List<T>/T[] e Optional<T> desses tipos.",
+                        field);
+                valid = false;
+            }
+        }
+        return valid;
     }
 
     /**

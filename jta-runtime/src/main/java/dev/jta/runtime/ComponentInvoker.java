@@ -1,5 +1,7 @@
 package dev.jta.runtime;
 
+import dev.jta.core.ConversionException;
+import dev.jta.core.ConverterRegistry;
 import jakarta.validation.ConstraintViolation;
 import jakarta.validation.Validator;
 
@@ -7,6 +9,7 @@ import java.lang.reflect.Field;
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
 import java.lang.reflect.Modifier;
+import java.util.List;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Set;
@@ -25,19 +28,33 @@ import java.util.Set;
  * vez de conter a logica do {@code ApplicationContext} do Spring
  * diretamente. Todo o resto (populate/invoke/validate) e identico.
  *
- * <p><b>Limitacao conhecida do MVP:</b> conversao de parametros suporta
- * apenas {@code String}, {@code int}/{@code Integer}, {@code long}/
- * {@code Long}, {@code double}/{@code Double} e {@code boolean}/
- * {@code Boolean}. Tipos compostos (listas, objetos aninhados) precisam
- * ser carregados pelo proprio componente via um servico injetado, nao
- * por bind automatico de query param.
+ * <p><b>Conversao de tipos</b> (fase de correcao de dados): delegada a
+ * {@link ConverterRegistry} (jta-core) em vez de viver embutida aqui -
+ * ver essa classe para a lista completa de tipos suportados (primitivos,
+ * enums, {@code LocalDate}/{@code LocalDateTime}, {@code BigDecimal},
+ * {@code UUID}, {@code List<T>}/arrays, {@code Optional<T>}) e para o que
+ * e validado em compile-time por {@code JtaAnnotationProcessor} contra
+ * essa mesma lista. Uma falha de conversao nunca mais e ignorada
+ * silenciosamente nem propaga crua: vira uma entrada no
+ * {@code Map<String,String>} de erros devolvido por
+ * {@link #populateFromParams}/{@link #populateFromPathVariables}, no
+ * mesmo formato que {@link #validate} ja usa para violacoes de Bean
+ * Validation - o chamador (ver {@code JtaActionDispatcher}/
+ * {@code JtaPageDispatcher}) funde os dois e os aplica via
+ * {@link #applyErrors}.
  */
 public final class ComponentInvoker {
 
     private final ComponentFactory factory;
+    private final ConverterRegistry converters;
 
     public ComponentInvoker(ComponentFactory factory) {
+        this(factory, new ConverterRegistry());
+    }
+
+    public ComponentInvoker(ComponentFactory factory, ConverterRegistry converters) {
         this.factory = factory;
+        this.converters = converters;
     }
 
     public Object instantiate(Class<?> type) {
@@ -52,8 +69,19 @@ public final class ComponentInvoker {
      * classico). {@code bindableFields} vem de
      * {@code ComponentMetadata.bindableFields()}, computado pelo
      * processor em compile-time a partir do que o template realmente usa.
+     *
+     * <p>Campos {@code List<T>}/array recebem todos os valores enviados
+     * para aquele nome (bind multi-valor); qualquer outro tipo usa o
+     * ultimo valor da lista (convencao de formulario HTML - ex: o truque
+     * de checkbox com um {@code <input type="hidden">} do mesmo nome
+     * antes dele no DOM, onde o valor que deve prevalecer e o ultimo).
+     *
+     * @return mapa de erros de conversao (campo -&gt; mensagem), vazio se
+     *         nada falhou - mesmo formato usado por {@link #validate},
+     *         para o chamador fundir os dois antes de {@link #applyErrors}
      */
-    public void populateFromParams(Object instance, Map<String, String[]> params, Set<String> bindableFields) {
+    public Map<String, String> populateFromParams(Object instance, Map<String, String[]> params, Set<String> bindableFields) {
+        Map<String, String> errors = new LinkedHashMap<>();
         for (Field field : instance.getClass().getFields()) {
             if (Modifier.isStatic(field.getModifiers())) {
                 continue;
@@ -65,8 +93,9 @@ public final class ComponentInvoker {
             if (values == null || values.length == 0) {
                 continue;
             }
-            setField(instance, field, values[0]);
+            setField(instance, field, values, errors);
         }
+        return errors;
     }
 
     /**
@@ -75,11 +104,14 @@ public final class ComponentInvoker {
      * em jta-spring-boot-starter). Compartilha a mesma conversao de tipo,
      * o mesmo mecanismo de "campo publico = estado", e a mesma restricao
      * a {@code bindableFields} usada para query params - a diferenca e so
-     * de onde o valor vem na requisicao.
+     * de onde o valor vem na requisicao (sempre um unico valor).
+     *
+     * @return mapa de erros de conversao, no mesmo formato de {@link #populateFromParams}
      */
-    public void populateFromPathVariables(Object instance, Map<String, String> pathVariables, Set<String> bindableFields) {
+    public Map<String, String> populateFromPathVariables(Object instance, Map<String, String> pathVariables, Set<String> bindableFields) {
+        Map<String, String> errors = new LinkedHashMap<>();
         if (pathVariables == null || pathVariables.isEmpty()) {
-            return;
+            return errors;
         }
         for (Field field : instance.getClass().getFields()) {
             if (Modifier.isStatic(field.getModifiers())) {
@@ -92,29 +124,39 @@ public final class ComponentInvoker {
             if (value == null) {
                 continue;
             }
-            setField(instance, field, value);
+            setField(instance, field, new String[] {value}, errors);
         }
+        return errors;
     }
 
-    private void setField(Object instance, Field field, String rawValue) {
+    /**
+     * Converte {@code rawValues} (via {@link ConverterRegistry}, usando o
+     * tipo generico do campo para resolver {@code List<T>}/{@code Optional<T>})
+     * e atribui ao campo. Uma {@link ConversionException} (dado invalido
+     * do usuario) vira uma entrada em {@code errorsOut} em vez de
+     * propagar - falha de acesso via reflection ({@link IllegalAccessException},
+     * so pode ser bug do framework, ja que o campo e sempre publico)
+     * continua propagando como {@link IllegalStateException}, igual ao
+     * resto desta classe.
+     */
+    private void setField(Object instance, Field field, String[] rawValues, Map<String, String> errorsOut) {
+        Object converted;
         try {
             Class<?> type = field.getType();
-            if (type == String.class) {
-                field.set(instance, rawValue);
-            } else if (type == int.class || type == Integer.class) {
-                field.set(instance, Integer.parseInt(rawValue));
-            } else if (type == long.class || type == Long.class) {
-                field.set(instance, Long.parseLong(rawValue));
-            } else if (type == double.class || type == Double.class) {
-                field.set(instance, Double.parseDouble(rawValue));
-            } else if (type == boolean.class || type == Boolean.class) {
-                field.set(instance, Boolean.parseBoolean(rawValue));
+            if (List.class.isAssignableFrom(type) || type.isArray()) {
+                converted = converters.convertMulti(field.getGenericType(), List.of(rawValues));
+            } else {
+                converted = converters.convert(field.getGenericType(), rawValues[rawValues.length - 1]);
             }
-            // outros tipos: ignorado silenciosamente no MVP - o componente
-            // mantem o valor default do campo. Documentado como limitacao.
-        } catch (IllegalAccessException | NumberFormatException e) {
-            throw new IllegalArgumentException("Nao foi possivel converter '" + rawValue + "' para o campo '"
-                    + field.getName() + "' (" + field.getType().getSimpleName() + ") em " + instance.getClass().getName(), e);
+        } catch (ConversionException e) {
+            errorsOut.put(field.getName(), e.getMessage());
+            return;
+        }
+        try {
+            field.set(instance, converted);
+        } catch (IllegalAccessException e) {
+            throw new IllegalStateException("Nao foi possivel popular o campo '" + field.getName() + "' em "
+                    + instance.getClass().getName(), e);
         }
     }
 
