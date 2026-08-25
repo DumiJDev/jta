@@ -70,5 +70,59 @@
             <artifactId>spring-boot-configuration-processor</artifactId>
             <optional>true</optional>
         </dependency>
+        <dependency>
+            <!-- primeira suite de testes deste modulo (ver SpringJtaTckTest) -
+                 ate aqui a integracao Spring so era verificada indiretamente
+                 via jta-demo. -->
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-test</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <!-- TCK compartilhado - roda a mesma bateria de testes de
+                 contrato HTTP contra este adaptador (ver SpringJtaTckTest). -->
+            <groupId>dev.jta</groupId>
+            <artifactId>jta-tck</artifactId>
+            <version>${project.version}</version>
+            <scope>test</scope>
+        </dependency>
     </dependencies>
+
+    <build>
+        <plugins>
+            <plugin>
+                <!-- so para os fixtures de teste deste modulo (SpringJtaTckTest) -
+                     um consumidor real declara isto na propria app, como o
+                     jta-demo ja faz. Mesmo padrao de jta-javalin-starter/jta-standalone. -->
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-compiler-plugin</artifactId>
+                <configuration>
+                    <annotationProcessorPaths>
+                        <path>
+                            <groupId>dev.jta</groupId>
+                            <artifactId>jta-processor</artifactId>
+                            <version>${project.version}</version>
+                        </path>
+                    </annotationProcessorPaths>
+                </configuration>
+            </plugin>
+            <plugin>
+                <groupId>gg.jte</groupId>
+                <artifactId>jte-maven-plugin</artifactId>
+                <executions>
+                    <execution>
+                        <phase>process-test-classes</phase>
+                        <goals>
+                            <goal>precompile</goal>
+                        </goals>
+                    </execution>
+                </executions>
+                <configuration>
+                    <sourceDirectory>${project.build.directory}/generated-test-sources/test-annotations/jta-templates</sourceDirectory>
+                    <targetDirectory>${project.build.testOutputDirectory}</targetDirectory>
+                    <contentType>Html</contentType>
+                </configuration>
+            </plugin>
+        </plugins>
+    </build>
 </project>

@@ -52,5 +52,114 @@
             <artifactId>quarkus-junit5-internal</artifactId>
             <scope>test</scope>
         </dependency>
+        <dependency>
+            <groupId>dev.jta</groupId>
+            <artifactId>jta-processor</artifactId>
+            <version>${project.version}</version>
+            <!-- so para os fixtures de teste deste modulo (QuarkusJtaTckTest), via
+                 annotationProcessorPaths abaixo - nunca entra em runtime. -->
+            <scope>provided</scope>
+        </dependency>
+        <dependency>
+            <groupId>gg.jte</groupId>
+            <artifactId>jte</artifactId>
+        </dependency>
+        <dependency>
+            <!-- TCK compartilhado - roda a mesma bateria de testes de
+                 contrato HTTP contra este adaptador (ver QuarkusJtaTckTest). -->
+            <groupId>dev.jta</groupId>
+            <artifactId>jta-tck</artifactId>
+            <version>${project.version}</version>
+            <scope>test</scope>
+        </dependency>
     </dependencies>
+
+    <build>
+        <plugins>
+            <plugin>
+                <!-- Indexa as proprias classes deste modulo (JtaProcessor e demais
+                     @BuildStep) em META-INF/jandex.index - sem isto, ExtensionLoader
+                     nao encontra os @BuildStep daqui quando o modulo e testado via
+                     QuarkusUnitTest a partir do proprio reactor (target/classes como
+                     diretorio solto, nao um jar publicado com indice ja embutido). -->
+                <groupId>io.smallrye</groupId>
+                <artifactId>jandex-maven-plugin</artifactId>
+                <version>3.2.4</version>
+                <executions>
+                    <execution>
+                        <id>make-index</id>
+                        <goals>
+                            <goal>jandex</goal>
+                        </goals>
+                    </execution>
+                </executions>
+            </plugin>
+            <plugin>
+                <!-- QuarkusUnitTest (QuarkusJtaTckTest) exige o JBoss LogManager
+                     ja ativo ANTES do JVM de teste subir - sem isto, falha cedo
+                     com ClassCastException (LogManager$RootLogger nao pode virar
+                     org.jboss.logmanager.Logger) assim que a augmentation tenta
+                     configurar logging. jboss-logmanager ja vem transitivamente
+                     via quarkus-junit5-internal; so falta apontar a JVM para ele. -->
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-surefire-plugin</artifactId>
+                <configuration>
+                    <systemPropertyVariables>
+                        <java.util.logging.manager>org.jboss.logmanager.LogManager</java.util.logging.manager>
+                    </systemPropertyVariables>
+                </configuration>
+            </plugin>
+            <plugin>
+                <!-- annotationProcessorPaths so para o default-testCompile (fixtures
+                     deste modulo - QuarkusJtaTckTest) - NUNCA no default-compile
+                     (JtaProcessor e demais @BuildStep): declarar
+                     annotationProcessorPaths desliga a descoberta automatica de
+                     processors via classpath inteiro, e e exatamente essa
+                     descoberta automatica que roda o
+                     io.quarkus:quarkus-extension-processor (trazido
+                     transitivamente por quarkus-arc-deployment) responsavel por
+                     gerar META-INF/quarkus-build-steps.list durante a compilacao
+                     principal - sem esse arquivo, o ExtensionLoader do Quarkus
+                     nao encontra NENHUM @BuildStep deste modulo (bug real:
+                     augmentation "funcionava" sem erro nenhum, so que sem
+                     registrar rota alguma - todo GET virava 404). Aplicar isto
+                     so ao default-testCompile e o que evita quebrar o
+                     default-compile enquanto ainda processa os fixtures de teste
+                     com jta-processor. -->
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-compiler-plugin</artifactId>
+                <executions>
+                    <execution>
+                        <id>default-testCompile</id>
+                        <configuration>
+                            <annotationProcessorPaths>
+                                <path>
+                                    <groupId>dev.jta</groupId>
+                                    <artifactId>jta-processor</artifactId>
+                                    <version>${project.version}</version>
+                                </path>
+                            </annotationProcessorPaths>
+                        </configuration>
+                    </execution>
+                </executions>
+            </plugin>
+            <plugin>
+                <groupId>gg.jte</groupId>
+                <artifactId>jte-maven-plugin</artifactId>
+                <executions>
+                    <execution>
+                        <phase>process-test-classes</phase>
+                        <goals>
+                            <goal>precompile</goal>
+                        </goals>
+                    </execution>
+                </executions>
+                <configuration>
+                    <sourceDirectory>${project.build.directory}/generated-test-sources/test-annotations/jta-templates</sourceDirectory>
+                    <targetDirectory>${project.build.testOutputDirectory}</targetDirectory>
+                    <contentType>Html</contentType>
+                </configuration>
+            </plugin>
+        </plugins>
+    </build>
 </project>

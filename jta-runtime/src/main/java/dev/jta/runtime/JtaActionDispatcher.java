@@ -62,7 +62,15 @@ public final class JtaActionDispatcher {
 
         Object instance;
         try {
-            Class<?> type = Class.forName(metadata.fqn());
+            // Mesmo motivo de JtaPageDispatcher/SseHub: usa o classloader de
+            // contexto da thread, nao o do chamador (Class.forName(fqn) de 1
+            // argumento) - sob o classloading em varias camadas do Quarkus
+            // (QuarkusClassLoader), o classloader de JtaActionDispatcher
+            // (modulo jta-runtime, camada "base") nao enxerga as classes da
+            // aplicacao, so o classloader de contexto da thread de
+            // requisicao (setado pelo proprio Quarkus) enxerga - achado real
+            // rodando o TCK do Quarkus (todo POST de acao devolvia 500).
+            Class<?> type = Class.forName(metadata.fqn(), true, Thread.currentThread().getContextClassLoader());
             instance = invoker.instantiate(type);
         } catch (ClassNotFoundException e) {
             throw new IllegalStateException("Classe do componente nao encontrada: " + metadata.fqn(), e);

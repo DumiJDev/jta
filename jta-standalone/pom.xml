@@ -62,6 +62,14 @@
             <artifactId>slf4j-simple</artifactId>
             <scope>test</scope>
         </dependency>
+        <dependency>
+            <!-- TCK compartilhado - roda a mesma bateria de testes de
+                 contrato HTTP contra este adaptador (ver StandaloneJtaTckTest). -->
+            <groupId>dev.jta</groupId>
+            <artifactId>jta-tck</artifactId>
+            <version>${project.version}</version>
+            <scope>test</scope>
+        </dependency>
     </dependencies>
 
     <build>

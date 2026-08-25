@@ -133,6 +133,55 @@ mvn verify                # suíte completa, incluindo testes de integração e 
 
 CI (`.github/workflows/build.yml`) roda `mvn verify` a cada push/PR.
 
+## Compatibilidade entre adaptadores (TCK)
+
+`jta-tck` é um TCK (Technology Compatibility Kit) compartilhado: a mesma
+bateria de testes de contrato HTTP (`AbstractJtaTck`) roda contra os 4
+adaptadores (Spring, Javalin, standalone, Quarkus), cada um subindo um
+servidor real com as mesmas fixtures e declarando, via
+`JtaAdapterHarness#supportedFeatures()`, quais features suporta hoje. O
+que um adaptador não declarar vira um skip nomeado e visível no relatório
+do Surefire (nunca um "passa" silencioso).
+
+Matriz gerada rodando `mvn test` (ou `verify`) nos módulos adaptadores —
+o que escreve `target/jta-tck-report.properties` em cada um — seguido de
+`java -cp jta-tck/target/classes dev.jta.tck.CompatibilityMatrixGenerator .`:
+
+<!-- JTA-TCK-MATRIX-BEGIN (gerado por CompatibilityMatrixGenerator - nao editar a mao) -->
+| Feature | Javalin | Quarkus | Spring | Standalone |
+|---|---|---|---|---|
+| Roteamento (@Route + path variables) | ✅ | ✅ | ✅ | ✅ |
+| Acoes HTMX (POST /__jta/action/{selector}) | ✅ | ✅ | ✅ | ✅ |
+| Allowlist de acoes (metodo nao declarado -> 404, nao invocacao arbitraria) | ✅ | ✅ | ✅ | ✅ |
+| Autorizacao por role (@RequiresRole) - acesso nao autenticado a pagina restrita | ✅ | ✅ | ✅ | ✅ |
+| Server-Sent Events (@Sse) | ✅ | ✅ | ✅ | ✅ |
+| i18n / traducao (Translations.translate) | ✅ | ⛔ | ✅ | ✅ |
+| Protecao CSRF nativa (double-submit HMAC) | ⛔ | ⛔ | ⛔ | ⛔ |
+| Sessao agnostica de framework | ⛔ | ⛔ | ⛔ | ⛔ |
+| Upload de arquivo (multipart/form-data) | ⛔ | ⛔ | ⛔ | ⛔ |
+| Composicao de componentes com argumentos (@Use + @Input) | ⛔ | ⛔ | ⛔ | ⛔ |
+<!-- JTA-TCK-MATRIX-END -->
+
+✅ suportado e verificado pelo TCK · ⛔ não suportado ainda (skip nomeado,
+com o motivo no relatório do Surefire) — nenhuma linha ❌ hoje, que seria
+uma feature declarada suportada mas que o TCK provou quebrada.
+
+O único ⛔ fora do bloco de features ainda não implementadas em nenhum
+adaptador (CSRF/sessão/upload/composição, todos de outra fase) é i18n no
+Quarkus: `dev.jta.core.Translations` resolve o `ResourceBundle` pelo
+classloader da classe chamadora, e sob o `QuarkusClassLoader` em camadas
+isso não enxerga `messages.properties` da aplicação — corrigir exige
+mexer em `Translations.java` (fora do escopo desta stream). CSRF, sessão,
+upload de arquivo e composição de componentes (`@Use`/`@Input`) ainda não
+têm probe no TCK porque nenhum adaptador os declara suportados nesta
+versão do branch.
+
+`CompatibilityMatrixGenerator ... --check` compara a matriz gerada contra
+este bloco e sai com código 1 se divergir — ainda não está ligado ao CI
+(`.github/workflows/build.yml`); falta um passo que rode `mvn verify` em
+todos os módulos adaptadores antes de invocar o `--check` (documentado
+como follow-up).
+
 ## Limitações honestas
 
 - Layouts aninhados (`@Layout` usando outro `@Layout`) não são suportados.
@@ -145,10 +194,10 @@ CI (`.github/workflows/build.yml`) roda `mvn verify` a cada push/PR.
   `4.0.0-beta6` conscientemente (ver [`SECURITY.md`](./SECURITY.md) e
   [`CHANGELOG.md`](./CHANGELOG.md)); sobrescreva `[htmx] cdn_url` em
   `jta.config.toml` se preferir a série 2.x.
-- Só existe adaptador para Spring Boot ainda. `jta-runtime` já extraiu o
-  núcleo agnóstico (ver "Arquitetura" acima) especificamente para reduzir
-  esse gap — Quarkus/Javalin/standalone/plugin Gradle ficam mais baratos
-  de construir agora, mas ainda não existem.
+- Existem 4 adaptadores (Spring, Javalin, standalone, Quarkus) sobre o
+  mesmo núcleo agnóstico `jta-runtime`, mas nem toda feature está em
+  paridade entre eles — ver a matriz de compatibilidade do TCK acima.
+  Plugin Gradle e Maven publish ainda não existem.
 
 Histórico completo de decisões, features e bugs corrigidos:
 [`CHANGELOG.md`](./CHANGELOG.md) · [`TROUBLESHOOTING.md`](./TROUBLESHOOTING.md).
