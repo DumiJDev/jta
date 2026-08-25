@@ -25,7 +25,6 @@
         <module>jta-standalone</module>
         <module>jta-quarkus-extension</module>
         <module>jta-cli</module>
-        <module>jta-demo</module>
     </modules>
 
     <properties>
