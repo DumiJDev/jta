@@ -58,7 +58,7 @@ public final class ComponentInvoker {
             if (Modifier.isStatic(field.getModifiers())) {
                 continue;
             }
-            if (!bindableFields.contains(field.getName())) {
+            if (isReservedFieldName(field.getName()) || !bindableFields.contains(field.getName())) {
                 continue;
             }
             String[] values = params.get(field.getName());
@@ -85,7 +85,7 @@ public final class ComponentInvoker {
             if (Modifier.isStatic(field.getModifiers())) {
                 continue;
             }
-            if (!bindableFields.contains(field.getName())) {
+            if (isReservedFieldName(field.getName()) || !bindableFields.contains(field.getName())) {
                 continue;
             }
             String value = pathVariables.get(field.getName());
@@ -94,6 +94,19 @@ public final class ComponentInvoker {
             }
             setField(instance, field, value);
         }
+    }
+
+    /**
+     * Segunda camada de defesa contra o vetor de mass-assignment que
+     * {@link dev.jta.core.ReservedFieldNames} documenta: mesmo que
+     * {@code bindableFields} (calculado em compile-time) por algum bug
+     * viesse a conter um desses nomes, este runtime nunca os popula a
+     * partir da requisicao - defesa em profundidade, mesmo padrao do
+     * achado #1 do SECURITY.md, onde a checagem primaria (compile-time,
+     * ver {@code JtaAnnotationProcessor}) nao e a unica linha de defesa.
+     */
+    private static boolean isReservedFieldName(String name) {
+        return dev.jta.core.ReservedFieldNames.ALL.contains(name);
     }
 
     private void setField(Object instance, Field field, String rawValue) {
@@ -108,7 +121,7 @@ public final class ComponentInvoker {
             } else if (type == double.class || type == Double.class) {
                 field.set(instance, Double.parseDouble(rawValue));
             } else if (type == boolean.class || type == Boolean.class) {
-                field.set(instance, Boolean.parseBoolean(rawValue));
+                field.set(instance, parseCheckboxAwareBoolean(rawValue));
             }
             // outros tipos: ignorado silenciosamente no MVP - o componente
             // mantem o valor default do campo. Documentado como limitacao.
@@ -116,6 +129,36 @@ public final class ComponentInvoker {
             throw new IllegalArgumentException("Nao foi possivel converter '" + rawValue + "' para o campo '"
                     + field.getName() + "' (" + field.getType().getSimpleName() + ") em " + instance.getClass().getName(), e);
         }
+    }
+
+    /**
+     * Converte o valor cru de um campo booleano vindo da requisicao.
+     *
+     * <p>{@code Boolean.parseBoolean} sozinho nao serve aqui: ele so
+     * reconhece a string literal {@code "true"}, e um
+     * {@code <input type="checkbox" name="ativo">} sem atributo
+     * {@code value} explicito envia {@code "on"} quando marcado - o valor
+     * default do HTML. O resultado era um checkbox que ficava
+     * silenciosamente {@code false} por mais que o utilizador o marcasse,
+     * sem erro nem log: nao era um tipo "nao suportado", era um tipo da
+     * lista dos suportados a converter mal.
+     *
+     * <p>Aceita as formas que um formulario HTML realmente produz
+     * ({@code on}) e as que um cliente programatico costuma enviar
+     * ({@code true}, {@code 1}, {@code yes}), sem diferenciar maiusculas.
+     * Qualquer outro valor - incluindo a ausencia do parametro, tratada
+     * antes daqui - e {@code false}, que e a semantica correta de um
+     * checkbox nao marcado (o browser simplesmente nao envia o campo).
+     */
+    private static boolean parseCheckboxAwareBoolean(String rawValue) {
+        if (rawValue == null) {
+            return false;
+        }
+        String normalized = rawValue.trim();
+        return normalized.equalsIgnoreCase("true")
+                || normalized.equalsIgnoreCase("on")
+                || normalized.equalsIgnoreCase("yes")
+                || normalized.equals("1");
     }
 
     /**

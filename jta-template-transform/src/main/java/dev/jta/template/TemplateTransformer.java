@@ -1,4 +1,4 @@
-package dev.jta.processor;
+package dev.jta.template;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -25,8 +25,21 @@ import java.util.regex.Pattern;
  * metodo de template para logica composta. Isso e uma limitacao conhecida
  * e documentada, nao um bug: escrever um parser de expressoes completo foi
  * uma decisao explicita de ficar para uma fase futura.
+ *
+ * <p><b>Por que este modulo e nao jta-processor:</b> esta classe so
+ * manipula {@code String}/regex - nunca toca {@code javax.lang.model},
+ * {@code Filer} ou {@code Messager}. Extraida para {@code jta-template-transform}
+ * (module irmao, tambem zero-dependencias) para ser reutilizavel em dois
+ * contextos que nao sao annotation processing: um dev-loop com hot reload,
+ * que precisa re-rodar exatamente esta transformacao em runtime sem
+ * recompilar (ver plano de dev-loop), e testes diretos da transformacao,
+ * sem o peso de um harness de compile-testing sobre {@code JtaAnnotationProcessor}.
+ * {@code jta-processor} continua a unica classe que decide QUANDO chamar
+ * {@link #transform}, e de onde vem cada conjunto de nomes conhecidos
+ * (campos, metodos, acoes) - essa parte permanece dependente de
+ * {@code javax.lang.model} e nao foi movida.
  */
-final class TemplateTransformer {
+public final class TemplateTransformer {
 
     // {{ campo }}, {{ campo? }}, {{ campo! }} ou {{ metodo() }} - identificador
     // simples ou acesso a um nivel (campo.sub), sem operadores, com sufixo
@@ -46,13 +59,16 @@ final class TemplateTransformer {
     private static final Pattern TRANSLATE =
             Pattern.compile("\\{\\{\\s*'([^']+)'\\s*\\|\\s*translate\\s*\\}\\}");
 
-    record Result(String generatedJte, List<String> boundActions, List<ValidationError> errors, List<String> referencedFields) {
-        boolean hasErrors() {
+    public record Result(String generatedJte, List<String> boundActions, List<ValidationError> errors, List<String> referencedFields) {
+        public boolean hasErrors() {
             return !errors.isEmpty();
         }
     }
 
-    record ValidationError(String kind, String reference, String message) {
+    public record ValidationError(String kind, String reference, String message) {
+    }
+
+    private TemplateTransformer() {
     }
 
     /**
@@ -71,7 +87,7 @@ final class TemplateTransformer {
      *                      chave usada em {{ 'chave' | translate }} precisa existir
      *                      aqui, ou o build falha (i18n com verificacao estatica).
      */
-    static Result transform(String rawTemplate, String selector,
+    public static Result transform(String rawTemplate, String selector,
                              Set<String> knownFields, Set<String> knownMethods, Set<String> knownActions,
                              Set<String> nullableFields, Set<String> messageKeys) {
         List<ValidationError> errors = new ArrayList<>();

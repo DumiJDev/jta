@@ -22,7 +22,6 @@ import java.net.InetSocketAddress;
 import java.net.URLDecoder;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
-import java.util.Comparator;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -80,8 +79,10 @@ public final class JtaHttpServer {
             for (ComponentMetadata page : registry.pages()) {
                 pageRoutes.add(new PageRoute(RoutePattern.compile(page.routePath()), page));
             }
-            // padroes com menos variaveis primeiro, ex: "/produtos/novo" antes de "/produtos/{id}".
-            pageRoutes.sort(Comparator.comparingInt(route -> route.pattern().variableCount()));
+            // A ordem por especificidade ("/produtos/novo" antes de
+            // "/produtos/{id}") ja vem pronta de ComponentRegistry.pages(),
+            // que passou a ordenar na fonte para todos os adaptadores - este
+            // modulo nao precisa mais de a redefinir por conta propria.
 
             HttpServer server = HttpServer.create(new InetSocketAddress(port), 0);
             server.setExecutor(Executors.newVirtualThreadPerTaskExecutor());
@@ -129,9 +130,14 @@ public final class JtaHttpServer {
             try {
                 result = dispatcher.dispatch(route.metadata(), queryParams, pathVariables, user);
             } catch (IllegalArgumentException e) {
+                LOG.warn("Requisicao JTA invalida para a pagina '{}'", route.metadata().selector(), e);
                 sendResponse(exchange, 400, "");
                 return;
-            } catch (IllegalStateException e) {
+            } catch (RuntimeException e) {
+                // RuntimeException, nao IllegalStateException: uma NPE
+                // lancada por um metodo de template ou por um servico do dev
+                // escapava daqui sem log nenhum deste lado.
+                LOG.error("Falha interna ao renderizar a pagina '{}'", route.metadata().selector(), e);
                 sendResponse(exchange, 500, "");
                 return;
             }
@@ -177,9 +183,13 @@ public final class JtaHttpServer {
         try {
             result = dispatcher.dispatch(selector, action, params, user);
         } catch (IllegalArgumentException e) {
+            LOG.warn("Requisicao JTA invalida na acao '{}' de '{}'",
+                    sanitizeForLog(action), sanitizeForLog(selector), e);
             sendResponse(exchange, 400, "");
             return;
-        } catch (IllegalStateException e) {
+        } catch (RuntimeException e) {
+            LOG.error("Falha interna ao executar a acao '{}' de '{}'",
+                    sanitizeForLog(action), sanitizeForLog(selector), e);
             sendResponse(exchange, 500, "");
             return;
         }

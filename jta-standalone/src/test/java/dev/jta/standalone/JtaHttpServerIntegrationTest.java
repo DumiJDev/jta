@@ -101,4 +101,62 @@ class JtaHttpServerIntegrationTest {
 
         assertEquals(404, response.statusCode());
     }
+
+    /**
+     * Regressao: {@code Boolean.parseBoolean} so reconhecia {@code "true"},
+     * mas um checkbox HTML sem {@code value} explicito envia {@code "on"}
+     * quando marcado - o campo ficava sempre {@code false}.
+     */
+    @Test
+    void checkboxMarcadoEnviandoOnPopulaCampoBooleanoComoTrue() throws Exception {
+        String selector = SelectorDerivation.derive("dev.jta.standalone.ContaComCheckbox");
+
+        HttpResponse<String> response = client.send(
+                HttpRequest.newBuilder(URI.create(baseUrl() + "/__jta/action/" + selector + "?action=alternar"))
+                        .header("Content-Type", "application/x-www-form-urlencoded")
+                        .POST(HttpRequest.BodyPublishers.ofString("ativo=on"))
+                        .build(),
+                HttpResponse.BodyHandlers.ofString());
+
+        assertEquals(200, response.statusCode());
+        assertTrue(response.body().contains(">true<"),
+                "checkbox marcado (value 'on', o default do HTML) deveria reidratar o campo como true");
+    }
+
+    @Test
+    void checkboxAusenteDaRequisicaoNaoEAlterado() throws Exception {
+        String selector = SelectorDerivation.derive("dev.jta.standalone.ContaComCheckbox");
+
+        HttpResponse<String> response = client.send(
+                HttpRequest.newBuilder(URI.create(baseUrl() + "/__jta/action/" + selector + "?action=alternar"))
+                        .header("Content-Type", "application/x-www-form-urlencoded")
+                        .POST(HttpRequest.BodyPublishers.ofString(""))
+                        .build(),
+                HttpResponse.BodyHandlers.ofString());
+
+        assertEquals(200, response.statusCode());
+        assertTrue(response.body().contains(">false<"),
+                "sem o parametro 'ativo' na requisicao (checkbox desmarcado nao envia nada), "
+                        + "o campo deve manter o valor default, nao ser tratado como presente-mas-falso");
+    }
+
+    /**
+     * Regressao: os catches do adaptador so cobriam
+     * {@code IllegalArgumentException}/{@code IllegalStateException} - uma
+     * {@code NullPointerException} vinda de uma acao do consumidor escapava
+     * em vez de virar um 500 tratado.
+     */
+    @Test
+    void excecaoInesperadaDeUmaAcaoVira500EmVezDeDerrubarAConexao() throws Exception {
+        String selector = SelectorDerivation.derive("dev.jta.standalone.ComponenteInstavel");
+
+        HttpResponse<String> response = client.send(
+                HttpRequest.newBuilder(URI.create(baseUrl() + "/__jta/action/" + selector + "?action=explodir"))
+                        .header("Content-Type", "application/x-www-form-urlencoded")
+                        .POST(HttpRequest.BodyPublishers.ofString(""))
+                        .build(),
+                HttpResponse.BodyHandlers.ofString());
+
+        assertEquals(500, response.statusCode());
+    }
 }

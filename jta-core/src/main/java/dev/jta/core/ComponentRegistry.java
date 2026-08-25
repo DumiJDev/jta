@@ -6,6 +6,7 @@ import java.io.UncheckedIOException;
 import java.net.URL;
 import java.nio.charset.StandardCharsets;
 import java.util.Collections;
+import java.util.Comparator;
 import java.util.Enumeration;
 import java.util.HashMap;
 import java.util.List;
@@ -82,8 +83,42 @@ public final class ComponentRegistry {
         return metadata;
     }
 
+    /**
+     * Paginas ({@code @Route}) ordenadas por especificidade: menos
+     * variaveis de path primeiro, ex: {@code /produtos/novo} antes de
+     * {@code /produtos/{id}}; empates desfeitos pelo proprio caminho, para
+     * a ordem ser estavel entre execucoes.
+     *
+     * <p><b>Por que a ordenacao vive aqui e nao no adaptador:</b> o mapa
+     * interno e um {@link HashMap}, cuja ordem de iteracao nao e a de
+     * insercao nem e estavel entre JVMs. Adaptadores cujo router e
+     * "first-match-wins por ordem de registro" (Vert.x, no
+     * jta-quarkus-extension) registravam as rotas nessa ordem arbitraria,
+     * o que tornava {@code /produtos/novo} silenciosamente inalcancavel
+     * sempre que {@code /produtos/{id}} calhasse de ser registrada antes -
+     * sem erro, sem log, so um 404 inexplicavel. O jta-standalone ja
+     * corrigia isto por conta propria (ver {@code JtaHttpServer}), mas os
+     * outros nao tinham como saber que precisavam. Ordenar na fonte
+     * resolve para todos os hosts de uma vez, e e inofensivo para os
+     * routers que resolvem especificidade sozinhos em request-time
+     * (Spring MVC).
+     */
     public List<ComponentMetadata> pages() {
-        return bySelector.values().stream().filter(ComponentMetadata::isPage).toList();
+        return bySelector.values().stream()
+                .filter(ComponentMetadata::isPage)
+                .sorted(Comparator.comparingInt((ComponentMetadata m) -> pathVariableCount(m.routePath()))
+                        .thenComparing(ComponentMetadata::routePath))
+                .toList();
+    }
+
+    private static int pathVariableCount(String routePath) {
+        int count = 0;
+        for (int i = 0; i < routePath.length(); i++) {
+            if (routePath.charAt(i) == '{') {
+                count++;
+            }
+        }
+        return count;
     }
 
     public List<ComponentMetadata> all() {

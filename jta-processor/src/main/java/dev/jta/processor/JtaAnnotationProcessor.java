@@ -10,12 +10,16 @@ import dev.jta.core.RequiresRole;
 import dev.jta.core.Route;
 import dev.jta.core.Sse;
 import dev.jta.core.SelectorDerivation;
+import dev.jta.template.CssScoper;
+import dev.jta.template.DidYouMean;
+import dev.jta.template.TemplateTransformer;
 
 import javax.annotation.processing.AbstractProcessor;
 import javax.annotation.processing.Filer;
 import javax.annotation.processing.Messager;
 import javax.annotation.processing.RoundEnvironment;
 import javax.annotation.processing.SupportedAnnotationTypes;
+import javax.annotation.processing.SupportedOptions;
 import javax.annotation.processing.SupportedSourceVersion;
 import javax.lang.model.SourceVersion;
 import javax.lang.model.element.Element;
@@ -30,8 +34,12 @@ import javax.lang.model.util.Elements;
 import javax.tools.Diagnostic;
 import javax.tools.FileObject;
 import javax.tools.StandardLocation;
+import java.io.FileNotFoundException;
 import java.io.IOException;
 import java.io.Writer;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.LinkedHashSet;
@@ -61,7 +69,41 @@ import java.util.regex.Pattern;
  */
 @SupportedAnnotationTypes({"dev.jta.core.AComponent", "dev.jta.core.Layout"})
 @SupportedSourceVersion(SourceVersion.RELEASE_21)
+@SupportedOptions({
+        JtaAnnotationProcessor.OPTION_RESOURCES_DIR,
+        // Declara este processor como "aggregating" para o annotation
+        // processing incremental do Gradle. Sem esta declaracao o Gradle
+        // trata-o como nao-incremental e reprocessa o modulo inteiro a cada
+        // alteracao, com um aviso no log. "Aggregating" (e nao "isolating")
+        // e a categoria correta: a deteccao de colisao de selector precisa
+        // de ver todos os @AComponent da mesma ronda (ver selectorToFqn),
+        // o que e incompativel com o modo por-ficheiro do "isolating".
+        // O Maven ignora opcoes que nao conhece, portanto isto e inerte la.
+        "org.gradle.annotation.processing.aggregating"
+})
 public class JtaAnnotationProcessor extends AbstractProcessor {
+
+    /**
+     * Diretorio(s) de recursos do modulo a compilar, separados por
+     * {@code ,} ou pelo separador de path do sistema.
+     *
+     * <p>Existe por causa do Gradle. Todas as leituras de recurso deste
+     * processor (config, i18n, templateUrl/styleUrl) assumiam
+     * {@code StandardLocation.CLASS_OUTPUT} - o que so funciona no Maven,
+     * onde {@code target/classes} e partilhado entre a copia de recursos e
+     * a compilacao. No Gradle, {@code build/resources/main} e
+     * {@code build/classes/java/main} sao diretorios distintos, e
+     * {@code Filer.getResource} sobre CLASS_OUTPUT nao encontra la nada
+     * (ver gradle/gradle#7588). Como as leituras falhavam de forma
+     * graciosa, o resultado nao era um erro de build mas uma app compilada
+     * silenciosamente sem config nenhuma.
+     *
+     * <p>Quando esta opcao e passada, ela e <b>autoritativa</b>: o
+     * fallback para o {@code Filer} nao e tentado, para que um ficheiro em
+     * falta seja um erro visivel em vez de voltar a cair no caminho que
+     * nao funciona nesse ambiente.
+     */
+    static final String OPTION_RESOURCES_DIR = "jta.resourcesDir";
 
     // {id} em @Route("/produto/{id}") - nome do path variable
     private static final Pattern ROUTE_PARAM = Pattern.compile("\\{([a-zA-Z_][a-zA-Z0-9_]*)\\}");
@@ -79,6 +121,7 @@ public class JtaAnnotationProcessor extends AbstractProcessor {
     private Elements elementUtils;
     private JtaConfig config;
     private Set<String> messageKeys;
+    private List<Path> resourceDirs;
 
     @Override
     public synchronized void init(javax.annotation.processing.ProcessingEnvironment env) {
@@ -100,8 +143,7 @@ public class JtaAnnotationProcessor extends AbstractProcessor {
     private JtaConfig config() {
         if (config == null) {
             try {
-                FileObject resource = filer.getResource(StandardLocation.CLASS_OUTPUT, "", "jta.config.toml");
-                config = JtaConfig.parse(resource.getCharContent(true).toString());
+                config = JtaConfig.parse(readModuleResource("jta.config.toml"));
             } catch (IOException e) {
                 // jta.config.toml e opcional - ausencia cai graciosamente nos defaults.
                 config = JtaConfig.empty();
@@ -124,11 +166,8 @@ public class JtaAnnotationProcessor extends AbstractProcessor {
         if (messageKeys == null) {
             messageKeys = new java.util.HashSet<>();
             try {
-                FileObject resource = filer.getResource(StandardLocation.CLASS_OUTPUT, "", "messages.properties");
                 java.util.Properties props = new java.util.Properties();
-                try (var in = resource.openInputStream()) {
-                    props.load(in);
-                }
+                props.load(new java.io.StringReader(readModuleResource("messages.properties")));
                 for (Object key : props.keySet()) {
                     messageKeys.add(key.toString());
                 }
@@ -137,6 +176,61 @@ public class JtaAnnotationProcessor extends AbstractProcessor {
             }
         }
         return messageKeys;
+    }
+
+    /**
+     * Le um recurso do modulo a ser compilado, pelo caminho relativo a raiz
+     * de recursos (ex: {@code "jta.config.toml"},
+     * {@code "jta-templates/com/exemplo/Card.jta"}).
+     *
+     * <p>Duas estrategias, nesta ordem:
+     * <ol>
+     *   <li>Se {@code -Ajta.resourcesDir} foi passado (caminho do Gradle),
+     *       le direto do filesystem. E autoritativo: nao ha fallback, para
+     *       que ficheiro em falta seja erro visivel.</li>
+     *   <li>Caso contrario (caminho do Maven), le via {@code Filer} sobre
+     *       {@code CLASS_OUTPUT}, onde os recursos ja foram copiados pela
+     *       fase anterior do build.</li>
+     * </ol>
+     *
+     * @throws IOException se o recurso nao existir ou nao puder ser lido -
+     *         cada chamador decide se isso e opcional (config/i18n) ou erro
+     *         de compilacao (templateUrl/styleUrl).
+     */
+    private String readModuleResource(String relativePath) throws IOException {
+        List<Path> dirs = resourceDirs();
+        if (!dirs.isEmpty()) {
+            for (Path dir : dirs) {
+                Path candidate = dir.resolve(relativePath);
+                if (Files.isRegularFile(candidate)) {
+                    return Files.readString(candidate, StandardCharsets.UTF_8);
+                }
+            }
+            throw new FileNotFoundException(
+                    relativePath + " nao encontrado em nenhum dos diretorios de recursos declarados por -A"
+                            + OPTION_RESOURCES_DIR + " (" + dirs + ")");
+        }
+        FileObject resource = filer.getResource(StandardLocation.CLASS_OUTPUT, "", relativePath);
+        return resource.getCharContent(true).toString();
+    }
+
+    private List<Path> resourceDirs() {
+        if (resourceDirs == null) {
+            String raw = processingEnv.getOptions().get(OPTION_RESOURCES_DIR);
+            if (raw == null || raw.isBlank()) {
+                resourceDirs = List.of();
+            } else {
+                List<Path> dirs = new ArrayList<>();
+                for (String part : raw.split("[,;" + java.io.File.pathSeparator + "]")) {
+                    String trimmed = part.trim();
+                    if (!trimmed.isEmpty()) {
+                        dirs.add(Path.of(trimmed));
+                    }
+                }
+                resourceDirs = List.copyOf(dirs);
+            }
+        }
+        return resourceDirs;
     }
 
     @Override
@@ -259,6 +353,18 @@ public class JtaAnnotationProcessor extends AbstractProcessor {
                 bindableFields.add(routeParamMatcher.group(1));
             }
         }
+        if (!reportReservedFieldNameCollision(known.explicitlyBindableFields(), routePath, type)) {
+            return;
+        }
+        // dev.jta.core.ReservedFieldNames.ALL - nomes que o runtime decide
+        // (sessao/flash/erro), nunca o cliente. A checagem acima ja falhou
+        // o build se algum desses nomes tivesse entrado por @Bindable ou
+        // por ser um path param; esta remocao cobre so o caso de o
+        // template simplesmente interpolar um campo com um desses nomes
+        // (ex: {{ flashSuccess }}), que sem isto entraria na allowlist so
+        // por ser referenciado - ver ReservedFieldNames para o cenario de
+        // mass-assignment que isto evita.
+        bindableFields.removeAll(dev.jta.core.ReservedFieldNames.ALL);
 
         allMetadata.add(new ComponentMetadata(
                 fqn, selector, explicit, routePath, List.copyOf(known.actions()), generatedRelativePath,
@@ -486,6 +592,49 @@ public class JtaAnnotationProcessor extends AbstractProcessor {
     }
 
     /**
+     * Erro de compilacao (fail-closed, nao exclusao silenciosa) quando um
+     * campo {@code @Bindable} explicito ou um {@code {param}} de rota usa
+     * um nome reservado ao runtime (ver {@link dev.jta.core.ReservedFieldNames}).
+     *
+     * <p>Diferente do campo so interpolado no template (esse e removido de
+     * {@code bindableFields} em silencio, ver o chamador) - aqui o dev
+     * pediu explicitamente para o campo ser bindavel a partir da
+     * requisicao, o que e um sinal forte demais de intencao para ignorar
+     * sem avisar: melhor falhar o build agora, com uma mensagem clara, do
+     * que deixar o dev descobrir mais tarde que o nome colide com um campo
+     * que uma feature futura do proprio JTA (sessao/flash/erro) vai
+     * injetar.
+     */
+    private boolean reportReservedFieldNameCollision(Set<String> explicitlyBindableFields, String routePath, TypeElement type) {
+        boolean ok = true;
+        for (String name : explicitlyBindableFields) {
+            if (dev.jta.core.ReservedFieldNames.ALL.contains(name)) {
+                messager.printMessage(Diagnostic.Kind.ERROR,
+                        "[JTA] '" + name + "' e um nome de campo reservado ao runtime do JTA (ver "
+                                + "dev.jta.core.ReservedFieldNames) e nao pode ser declarado @Bindable - escolha "
+                                + "outro nome para este campo.",
+                        type);
+                ok = false;
+            }
+        }
+        if (routePath != null) {
+            Matcher routeParamMatcher = ROUTE_PARAM.matcher(routePath);
+            while (routeParamMatcher.find()) {
+                String name = routeParamMatcher.group(1);
+                if (dev.jta.core.ReservedFieldNames.ALL.contains(name)) {
+                    messager.printMessage(Diagnostic.Kind.ERROR,
+                            "[JTA] '{" + name + "}' em @Route(\"" + routePath + "\") usa um nome de campo "
+                                    + "reservado ao runtime do JTA (ver dev.jta.core.ReservedFieldNames) - escolha "
+                                    + "outro nome para este path variable.",
+                            type);
+                    ok = false;
+                }
+            }
+        }
+        return ok;
+    }
+
+    /**
      * Extrai o FQN de {@code @Route(layout = MeuLayout.class)}.
      *
      * <p>Chamar {@code route.layout()} diretamente e o jeito errado de
@@ -662,8 +811,7 @@ public class JtaAnnotationProcessor extends AbstractProcessor {
         String packagePath = elementUtils.getPackageOf(type).getQualifiedName().toString().replace('.', '/');
         String resourcePath = "jta-templates/" + (packagePath.isEmpty() ? "" : packagePath + "/") + fileName;
         try {
-            FileObject resource = filer.getResource(StandardLocation.CLASS_OUTPUT, "", resourcePath);
-            return resource.getCharContent(true).toString();
+            return readModuleResource(resourcePath);
         } catch (IOException e) {
             messager.printMessage(Diagnostic.Kind.ERROR,
                     "[JTA] nao foi possivel ler " + kind + " '" + fileName + "' - esperava encontrar o arquivo em "

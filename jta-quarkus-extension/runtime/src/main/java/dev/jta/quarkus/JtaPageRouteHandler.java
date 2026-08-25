@@ -10,6 +10,8 @@ import io.quarkus.arc.ManagedContext;
 import io.vertx.core.Handler;
 import io.vertx.core.MultiMap;
 import io.vertx.ext.web.RoutingContext;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.util.HashMap;
 import java.util.Map;
@@ -35,6 +37,8 @@ import java.util.Map;
  * {@code SecurityIdentity}) nao resolveriam corretamente.
  */
 final class JtaPageRouteHandler implements Handler<RoutingContext> {
+
+    private static final Logger LOG = LoggerFactory.getLogger(JtaPageRouteHandler.class);
 
     private final String selector;
 
@@ -62,9 +66,14 @@ final class JtaPageRouteHandler implements Handler<RoutingContext> {
             try {
                 result = dispatcher.dispatch(metadata, queryParams, pathVariables, user);
             } catch (IllegalArgumentException e) {
+                LOG.warn("Requisicao JTA invalida para a pagina '{}'", selector, e);
                 ctx.response().setStatusCode(400).end();
                 return;
-            } catch (IllegalStateException e) {
+            } catch (RuntimeException e) {
+                // RuntimeException, nao IllegalStateException: uma NPE
+                // lancada por um metodo de template ou por um servico do dev
+                // escapava daqui sem log nenhum deste lado.
+                LOG.error("Falha interna ao renderizar a pagina '{}'", selector, e);
                 ctx.response().setStatusCode(500).end();
                 return;
             }

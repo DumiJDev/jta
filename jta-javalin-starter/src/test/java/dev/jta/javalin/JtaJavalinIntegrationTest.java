@@ -86,4 +86,24 @@ class JtaJavalinIntegrationTest {
 
         assertEquals(404, response.statusCode());
     }
+
+    /**
+     * Regressao: os catches do adaptador so cobriam
+     * {@code IllegalArgumentException}/{@code IllegalStateException} - uma
+     * {@code NullPointerException} vinda de uma acao do consumidor escapava
+     * em vez de virar um 500 tratado.
+     */
+    @Test
+    void excecaoInesperadaDeUmaAcaoVira500EmVezDeEscaparDoAdaptador() throws Exception {
+        String selector = SelectorDerivation.derive("dev.jta.javalin.ComponenteInstavel");
+
+        HttpResponse<String> response = client.send(
+                HttpRequest.newBuilder(URI.create(baseUrl() + "/__jta/action/" + selector + "?action=explodir"))
+                        .header("Content-Type", "application/x-www-form-urlencoded")
+                        .POST(HttpRequest.BodyPublishers.ofString(""))
+                        .build(),
+                HttpResponse.BodyHandlers.ofString());
+
+        assertEquals(500, response.statusCode());
+    }
 }

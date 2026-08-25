@@ -55,9 +55,13 @@ final class JtaActionRouteHandler implements Handler<RoutingContext> {
             try {
                 result = dispatcher.dispatch(selector, action, params, user);
             } catch (IllegalArgumentException e) {
+                LOG.warn("Requisicao JTA invalida na acao '{}' de '{}'",
+                        sanitizeForLog(action), sanitizeForLog(selector), e);
                 ctx.response().setStatusCode(400).end();
                 return;
-            } catch (IllegalStateException e) {
+            } catch (RuntimeException e) {
+                LOG.error("Falha interna ao executar a acao '{}' de '{}'",
+                        sanitizeForLog(action), sanitizeForLog(selector), e);
                 ctx.response().setStatusCode(500).end();
                 return;
             }

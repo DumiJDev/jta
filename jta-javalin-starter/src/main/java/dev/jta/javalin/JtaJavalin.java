@@ -95,9 +95,15 @@ public final class JtaJavalin {
         try {
             result = dispatcher.dispatch(metadata, queryParams, pathVariables, user);
         } catch (IllegalArgumentException e) {
+            LOG.warn("Requisicao JTA invalida para a pagina '{}'", metadata.selector(), e);
             ctx.status(400);
             return;
-        } catch (IllegalStateException e) {
+        } catch (RuntimeException e) {
+            // RuntimeException, nao IllegalStateException: uma NPE lancada
+            // por um metodo de template ou por um servico injetado do dev
+            // escapava daqui e batia na pagina de erro default do Jetty, em
+            // vez do tratamento do JTA - e sem nenhum log deste lado.
+            LOG.error("Falha interna ao renderizar a pagina '{}'", metadata.selector(), e);
             ctx.status(500);
             return;
         }
@@ -126,9 +132,13 @@ public final class JtaJavalin {
         try {
             result = dispatcher.dispatch(selector, action, params, user);
         } catch (IllegalArgumentException e) {
+            LOG.warn("Requisicao JTA invalida na acao '{}' de '{}'",
+                    sanitizeForLog(action), sanitizeForLog(selector), e);
             ctx.status(400);
             return;
-        } catch (IllegalStateException e) {
+        } catch (RuntimeException e) {
+            LOG.error("Falha interna ao executar a acao '{}' de '{}'",
+                    sanitizeForLog(action), sanitizeForLog(selector), e);
             ctx.status(500);
             return;
         }

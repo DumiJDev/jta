@@ -11,7 +11,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 BUILD="/tmp/jta-smoke-build"
 rm -rf "$BUILD"
-mkdir -p "$BUILD/core-classes" "$BUILD/processor-classes/META-INF/services"
+mkdir -p "$BUILD/core-classes" "$BUILD/template-transform-classes" "$BUILD/processor-classes/META-INF/services"
 
 echo "==> Compilando jta-core (zero dependencias)"
 find "$ROOT/jta-core/src/main/java" -name "*.java" > "$BUILD/core-sources.txt"
@@ -21,9 +21,13 @@ echo "==> Rodando SmokeTest (SelectorDerivation + JSON round-trip de ComponentMe
 javac -cp "$BUILD/core-classes" -d "$BUILD/core-classes" "$ROOT/scripts/SmokeTest.java"
 java -cp "$BUILD/core-classes" SmokeTest
 
-echo "==> Compilando jta-processor (so depende de jta-core)"
+echo "==> Compilando jta-template-transform (zero dependencias - TemplateTransformer/CssScoper/DidYouMean, extraidos de jta-processor)"
+find "$ROOT/jta-template-transform/src/main/java" -name "*.java" > "$BUILD/template-transform-sources.txt"
+javac -d "$BUILD/template-transform-classes" @"$BUILD/template-transform-sources.txt"
+
+echo "==> Compilando jta-processor (depende de jta-core e jta-template-transform)"
 find "$ROOT/jta-processor/src/main/java" -name "*.java" > "$BUILD/processor-sources.txt"
-javac -cp "$BUILD/core-classes" -d "$BUILD/processor-classes" @"$BUILD/processor-sources.txt"
+javac -cp "$BUILD/core-classes:$BUILD/template-transform-classes" -d "$BUILD/processor-classes" @"$BUILD/processor-sources.txt"
 cp "$ROOT/jta-processor/src/main/resources/META-INF/services/javax.annotation.processing.Processor" \
    "$BUILD/processor-classes/META-INF/services/"
 
@@ -36,7 +40,7 @@ cp "$ROOT/jta-demo/src/main/resources/jta-templates/dev/jta/demo/SiteLayout.jta"
 cp "$ROOT/jta-demo/src/main/resources/jta-templates/dev/jta/demo/Contador.css" \
    "$BUILD/e2e-happy/classes/jta-templates/dev/jta/demo/Contador.css"
 javac -cp "$BUILD/core-classes" \
-      -processorpath "$BUILD/processor-classes:$BUILD/core-classes" \
+      -processorpath "$BUILD/processor-classes:$BUILD/core-classes:$BUILD/template-transform-classes" \
       -d "$BUILD/e2e-happy/classes" -s "$BUILD/e2e-happy/sources" \
       "$ROOT/jta-demo/src/main/java/dev/jta/demo/Contador.java" \
       "$ROOT/jta-demo/src/main/java/dev/jta/demo/SiteLayout.java"
@@ -66,7 +70,7 @@ public class Quebrado {
 }
 EOF
 if javac -cp "$BUILD/core-classes" \
-      -processorpath "$BUILD/processor-classes:$BUILD/core-classes" \
+      -processorpath "$BUILD/processor-classes:$BUILD/core-classes:$BUILD/template-transform-classes" \
       -d "$BUILD/e2e-broken/classes" -s "$BUILD/e2e-broken/sources" \
       "$BUILD/e2e-broken/src/dev/jta/demo2/Quebrado.java" 2>"$BUILD/broken-output.txt"; then
     echo "ERRO: o build deveria ter falhado para o componente com bindings invalidos!"
@@ -91,7 +95,7 @@ public class ProdutoOk {
 }
 EOF
 javac -cp "$BUILD/core-classes" \
-      -processorpath "$BUILD/processor-classes:$BUILD/core-classes" \
+      -processorpath "$BUILD/processor-classes:$BUILD/core-classes:$BUILD/template-transform-classes" \
       -d "$BUILD/e2e-route/classes" -s "$BUILD/e2e-route/sources" \
       "$BUILD/e2e-route/src/dev/jta/demo3/ProdutoOk.java"
 echo "OK: path param 'id' validado contra o campo publico 'id'"
@@ -107,7 +111,7 @@ public class ProdutoQuebrado {
 }
 EOF
 if javac -cp "$BUILD/core-classes" \
-      -processorpath "$BUILD/processor-classes:$BUILD/core-classes" \
+      -processorpath "$BUILD/processor-classes:$BUILD/core-classes:$BUILD/template-transform-classes" \
       -d "$BUILD/e2e-route/classes" -s "$BUILD/e2e-route/sources" \
       "$BUILD/e2e-route/src/dev/jta/demo3/ProdutoQuebrado.java" 2>"$BUILD/route-broken-output.txt"; then
     echo "ERRO: o build deveria ter falhado - {codigo} nao corresponde a nenhum campo publico!"
@@ -134,7 +138,7 @@ import dev.jta.core.AComponent;
 public class Botao {}
 EOF
 javac -cp "$BUILD/core-classes" \
-      -processorpath "$BUILD/processor-classes:$BUILD/core-classes" \
+      -processorpath "$BUILD/processor-classes:$BUILD/core-classes:$BUILD/template-transform-classes" \
       -d "$BUILD/e2e-config/classes" -s "$BUILD/e2e-config/sources" \
       "$BUILD/e2e-config/src/dev/jta/demo5/Botao.java"
 GERADO=$(grep -o '"selector": "[^"]*"' "$BUILD/e2e-config/classes/META-INF/jta/components.json")
@@ -163,7 +167,7 @@ public class Saudacao {
 }
 EOF
 javac -cp "$BUILD/core-classes" \
-      -processorpath "$BUILD/processor-classes:$BUILD/core-classes" \
+      -processorpath "$BUILD/processor-classes:$BUILD/core-classes:$BUILD/template-transform-classes" \
       -d "$BUILD/e2e-templateurl/classes" -s "$BUILD/e2e-templateurl/sources" \
       "$BUILD/e2e-templateurl/src/dev/jta/demo6/Saudacao.java"
 echo "--- .jte gerado a partir do templateUrl ---"
@@ -188,7 +192,7 @@ public class ListaOk {
 }
 EOF
 javac -cp "$BUILD/core-classes" \
-      -processorpath "$BUILD/processor-classes:$BUILD/core-classes" \
+      -processorpath "$BUILD/processor-classes:$BUILD/core-classes:$BUILD/template-transform-classes" \
       -d "$BUILD/e2e-atsign/classes" -s "$BUILD/e2e-atsign/sources" \
       "$BUILD/e2e-atsign/src/dev/jta/demo8/ListaOk.java"
 echo "OK: @for/@endfor legitimos nao disparam falso positivo"
@@ -201,7 +205,7 @@ import dev.jta.core.AComponent;
 public class HomeQuebrado {}
 EOF
 if javac -cp "$BUILD/core-classes" \
-      -processorpath "$BUILD/processor-classes:$BUILD/core-classes" \
+      -processorpath "$BUILD/processor-classes:$BUILD/core-classes:$BUILD/template-transform-classes" \
       -d "$BUILD/e2e-atsign/classes" -s "$BUILD/e2e-atsign/sources" \
       "$BUILD/e2e-atsign/src/dev/jta/demo8/HomeQuebrado.java" 2>"$BUILD/atsign-broken-output.txt"; then
     echo "ERRO: o build deveria ter falhado - '@' literal em contato@exemplo.com!"
@@ -226,7 +230,7 @@ public class Cartao {
 }
 EOF
 javac -cp "$BUILD/core-classes" \
-      -processorpath "$BUILD/processor-classes:$BUILD/core-classes" \
+      -processorpath "$BUILD/processor-classes:$BUILD/core-classes:$BUILD/template-transform-classes" \
       -d "$BUILD/e2e-styleurl/classes" -s "$BUILD/e2e-styleurl/sources" \
       "$BUILD/e2e-styleurl/src/dev/jta/demo9/Cartao.java"
 GERADO=$(grep -o '"scopedCss": "[^"]*"' "$BUILD/e2e-styleurl/classes/META-INF/jta/components.json")
@@ -250,7 +254,7 @@ import dev.jta.core.AComponent;
 public class ComponenteQuebrado {}
 EOF
 if javac -cp "$BUILD/core-classes" \
-      -processorpath "$BUILD/processor-classes:$BUILD/core-classes" \
+      -processorpath "$BUILD/processor-classes:$BUILD/core-classes:$BUILD/template-transform-classes" \
       -d "$BUILD/e2e-crash/classes" -s "$BUILD/e2e-crash/sources" \
       "$BUILD/e2e-crash/src/dev/jta/demo10/ComponenteQuebrado.java" 2>"$BUILD/crash-output.txt"; then
     echo "ERRO: o build deveria ter falhado - SimboloQueNaoExiste nao existe!"
@@ -284,7 +288,7 @@ import dev.jta.core.Route;
 public class PaginaComLayout {}
 EOF
 javac -cp "$BUILD/core-classes" \
-      -processorpath "$BUILD/processor-classes:$BUILD/core-classes" \
+      -processorpath "$BUILD/processor-classes:$BUILD/core-classes:$BUILD/template-transform-classes" \
       -d "$BUILD/e2e-layout/classes" -s "$BUILD/e2e-layout/sources" \
       "$BUILD/e2e-layout/src/dev/jta/demo11/SiteLayout.java" "$BUILD/e2e-layout/src/dev/jta/demo11/PaginaComLayout.java"
 echo "--- SiteLayout.jte gerado (esperado: dois @param, router-outlet -> \$unsafe{content}) ---"
@@ -314,7 +318,7 @@ public class LayoutSemOutlet {}
 EOF
 mkdir -p "$BUILD/e2e-layout-erro/classes" "$BUILD/e2e-layout-erro/sources"
 if javac -cp "$BUILD/core-classes" \
-      -processorpath "$BUILD/processor-classes:$BUILD/core-classes" \
+      -processorpath "$BUILD/processor-classes:$BUILD/core-classes:$BUILD/template-transform-classes" \
       -d "$BUILD/e2e-layout-erro/classes" -s "$BUILD/e2e-layout-erro/sources" \
       "$BUILD/e2e-layout-erro/src/dev/jta/demo12/LayoutSemOutlet.java" 2>"$BUILD/layout-erro-output.txt"; then
     echo "ERRO: deveria ter falhado - layout sem router-outlet!"
@@ -340,7 +344,7 @@ public class PaginaComLayoutErrado {}
 EOF
 mkdir -p "$BUILD/e2e-layout-erro2/classes" "$BUILD/e2e-layout-erro2/sources"
 if javac -cp "$BUILD/core-classes" \
-      -processorpath "$BUILD/processor-classes:$BUILD/core-classes" \
+      -processorpath "$BUILD/processor-classes:$BUILD/core-classes:$BUILD/template-transform-classes" \
       -d "$BUILD/e2e-layout-erro2/classes" -s "$BUILD/e2e-layout-erro2/sources" \
       "$BUILD/e2e-layout-erro2/src/dev/jta/demo13/NaoEhLayout.java" "$BUILD/e2e-layout-erro2/src/dev/jta/demo13/PaginaComLayoutErrado.java" \
       2>"$BUILD/layout-erro2-output.txt"; then
@@ -361,7 +365,7 @@ public class LayoutComDoisOutlets {}
 EOF
 mkdir -p "$BUILD/e2e-layout-erro3/classes" "$BUILD/e2e-layout-erro3/sources"
 if javac -cp "$BUILD/core-classes" \
-      -processorpath "$BUILD/processor-classes:$BUILD/core-classes" \
+      -processorpath "$BUILD/processor-classes:$BUILD/core-classes:$BUILD/template-transform-classes" \
       -d "$BUILD/e2e-layout-erro3/classes" -s "$BUILD/e2e-layout-erro3/sources" \
       "$BUILD/e2e-layout-erro3/src/dev/jta/demo14/LayoutComDoisOutlets.java" 2>"$BUILD/layout-erro3-output.txt"; then
     echo "ERRO: deveria ter falhado - dois router-outlet!"
@@ -405,7 +409,7 @@ public class PerfilOk {
 }
 EOF
 javac -cp "$BUILD/core-classes" \
-      -processorpath "$BUILD/processor-classes:$BUILD/core-classes" \
+      -processorpath "$BUILD/processor-classes:$BUILD/core-classes:$BUILD/template-transform-classes" \
       -d "$BUILD/e2e-nullsafety/classes" -s "$BUILD/e2e-nullsafety/sources" \
       "$BUILD/e2e-nullsafety/src/dev/jta/demo15/Nullable.java" "$BUILD/e2e-nullsafety/src/dev/jta/demo15/PerfilOk.java"
 echo "--- .jte gerado (esperado: ternario para ?, Objects.requireNonNull para !) ---"
@@ -429,7 +433,7 @@ public class PerfilQuebrado {
 }
 EOF
 if javac -cp "$BUILD/core-classes" \
-      -processorpath "$BUILD/processor-classes:$BUILD/core-classes" \
+      -processorpath "$BUILD/processor-classes:$BUILD/core-classes:$BUILD/template-transform-classes" \
       -d "$BUILD/e2e-nullsafety/classes" -s "$BUILD/e2e-nullsafety/sources" \
       "$BUILD/e2e-nullsafety/src/dev/jta/demo15/Nullable.java" \
       "$BUILD/e2e-nullsafety/src/dev/jta/demo15/PerfilQuebrado.java" 2>"$BUILD/nullsafety-erro.txt"; then
@@ -453,7 +457,7 @@ import dev.jta.core.AComponent;
 public class SaudacaoI18n {}
 EOF
 javac -cp "$BUILD/core-classes" \
-      -processorpath "$BUILD/processor-classes:$BUILD/core-classes" \
+      -processorpath "$BUILD/processor-classes:$BUILD/core-classes:$BUILD/template-transform-classes" \
       -d "$BUILD/e2e-i18n/classes" -s "$BUILD/e2e-i18n/sources" \
       "$BUILD/e2e-i18n/src/dev/jta/demo16/SaudacaoI18n.java"
 echo "--- .jte gerado (esperado: Translations.translate) ---"
@@ -474,7 +478,7 @@ import dev.jta.core.AComponent;
 public class SaudacaoQuebrada {}
 EOF
 if javac -cp "$BUILD/core-classes" \
-      -processorpath "$BUILD/processor-classes:$BUILD/core-classes" \
+      -processorpath "$BUILD/processor-classes:$BUILD/core-classes:$BUILD/template-transform-classes" \
       -d "$BUILD/e2e-i18n/classes" -s "$BUILD/e2e-i18n/sources" \
       "$BUILD/e2e-i18n/src/dev/jta/demo16/SaudacaoQuebrada.java" 2>"$BUILD/i18n-erro.txt"; then
     echo "ERRO: deveria ter falhado - chave inexistente!"
@@ -517,7 +521,7 @@ echo "OK: jta init gerou um projeto com pom.xml valido"
 mkdir -p "$BUILD/cli-verify/src/com/example/app" "$BUILD/cli-verify/classes" "$BUILD/cli-verify/sources"
 cp meu-projeto/src/main/java/com/example/app/Ola.java "$BUILD/cli-verify/src/com/example/app/"
 javac -cp "$BUILD/core-classes" \
-      -processorpath "$BUILD/processor-classes:$BUILD/core-classes" \
+      -processorpath "$BUILD/processor-classes:$BUILD/core-classes:$BUILD/template-transform-classes" \
       -d "$BUILD/cli-verify/classes" -s "$BUILD/cli-verify/sources" \
       "$BUILD/cli-verify/src/com/example/app/Ola.java"
 echo "OK: componente de exemplo gerado por 'jta init' compila de verdade contra o processor real"
@@ -562,7 +566,7 @@ import dev.jta.core.AllowAnonymous;
 public class PublicPage {}
 EOF
 javac -cp "$BUILD/core-classes" \
-      -processorpath "$BUILD/processor-classes:$BUILD/core-classes" \
+      -processorpath "$BUILD/processor-classes:$BUILD/core-classes:$BUILD/template-transform-classes" \
       -d "$BUILD/e2e-security/classes" -s "$BUILD/e2e-security/sources" \
       "$BUILD/e2e-security/src/dev/jta/demo17/AppRoles.java" \
       "$BUILD/e2e-security/src/dev/jta/demo17/AdminPage.java" \
@@ -589,7 +593,7 @@ import dev.jta.core.RequiresRole;
 public class PaginaComRoleErrada {}
 EOF
 if javac -cp "$BUILD/core-classes:$BUILD/e2e-security/classes" \
-      -processorpath "$BUILD/processor-classes:$BUILD/core-classes" \
+      -processorpath "$BUILD/processor-classes:$BUILD/core-classes:$BUILD/template-transform-classes" \
       -d "$BUILD/e2e-security/classes" -s "$BUILD/e2e-security/sources" \
       "$BUILD/e2e-security/src/dev/jta/demo17/PaginaComRoleErrada.java" 2>"$BUILD/security-erro1.txt"; then
     echo "ERRO: deveria ter falhado - role 'ADMINN' nao existe no enum!"
@@ -611,7 +615,7 @@ import dev.jta.core.RequiresRole;
 public class PaginaContraditoria {}
 EOF
 if javac -cp "$BUILD/core-classes:$BUILD/e2e-security/classes" \
-      -processorpath "$BUILD/processor-classes:$BUILD/core-classes" \
+      -processorpath "$BUILD/processor-classes:$BUILD/core-classes:$BUILD/template-transform-classes" \
       -d "$BUILD/e2e-security/classes" -s "$BUILD/e2e-security/sources" \
       "$BUILD/e2e-security/src/dev/jta/demo17/PaginaContraditoria.java" 2>"$BUILD/security-erro2.txt"; then
     echo "ERRO: deveria ter falhado - @RequiresRole + @AllowAnonymous e contraditorio!"
@@ -634,7 +638,7 @@ public class Notificacoes {
 }
 EOF
 javac -cp "$BUILD/core-classes" \
-      -processorpath "$BUILD/processor-classes:$BUILD/core-classes" \
+      -processorpath "$BUILD/processor-classes:$BUILD/core-classes:$BUILD/template-transform-classes" \
       -d "$BUILD/e2e-sse/classes" -s "$BUILD/e2e-sse/sources" \
       "$BUILD/e2e-sse/src/dev/jta/demo18/Notificacoes.java"
 if ! grep -q '"ssePath": "/notificacoes"' "$BUILD/e2e-sse/classes/META-INF/jta/components.json" || \
@@ -664,7 +668,7 @@ public class Perfil {
 }
 EOF
 javac -cp "$BUILD/core-classes" \
-      -processorpath "$BUILD/processor-classes:$BUILD/core-classes" \
+      -processorpath "$BUILD/processor-classes:$BUILD/core-classes:$BUILD/template-transform-classes" \
       -d "$BUILD/e2e-bindable/classes" -s "$BUILD/e2e-bindable/sources" \
       "$BUILD/e2e-bindable/src/dev/jta/demo19/Perfil.java"
 JSON=$(cat "$BUILD/e2e-bindable/classes/META-INF/jta/components.json")
@@ -674,5 +678,116 @@ if ! echo "$JSON" | grep -q '"bindableFields": \["nome", "pagina", "id"\]'; then
     exit 1
 fi
 echo "OK: 'nome' (interpolado) e 'id' (path param) e 'pagina' (@Bindable) entraram; 'isAdmin' (nunca referenciado) NAO entrou."
+
+echo
+echo "==> Testando -Ajta.resourcesDir (caminho do Gradle: recursos NAO vivem em CLASS_OUTPUT)"
+# No Maven, resources e classes compartilham target/classes - e por isso que
+# os testes acima simulam o Maven escrevendo jta.config.toml direto em
+# .../classes. No Gradle, build/resources/main e build/classes/java/main sao
+# diretorios DISTINTOS (ver gradle/gradle#7588) - este teste simula
+# exatamente essa separacao, com jta.config.toml num diretorio que NAO e o
+# -d do javac, provando que -Ajta.resourcesDir e o unico jeito do processor
+# encontrar o ficheiro nesse layout.
+mkdir -p "$BUILD/e2e-gradle/src/dev/jta/demo20" "$BUILD/e2e-gradle/classes" "$BUILD/e2e-gradle/sources" "$BUILD/e2e-gradle/resources"
+cat > "$BUILD/e2e-gradle/resources/jta.config.toml" << 'EOF'
+[selector]
+strip_domain_prefix = false
+separator = "."
+EOF
+cat > "$BUILD/e2e-gradle/src/dev/jta/demo20/Botao.java" << 'EOF'
+package dev.jta.demo20;
+import dev.jta.core.AComponent;
+@AComponent(template = "<button>ok</button>")
+public class Botao {}
+EOF
+javac -cp "$BUILD/core-classes" \
+      -processorpath "$BUILD/processor-classes:$BUILD/core-classes:$BUILD/template-transform-classes" \
+      -Ajta.resourcesDir="$BUILD/e2e-gradle/resources" \
+      -d "$BUILD/e2e-gradle/classes" -s "$BUILD/e2e-gradle/sources" \
+      "$BUILD/e2e-gradle/src/dev/jta/demo20/Botao.java"
+GERADO=$(grep -o '"selector": "[^"]*"' "$BUILD/e2e-gradle/classes/META-INF/jta/components.json")
+echo "Selector gerado: $GERADO"
+if [ "$GERADO" != '"selector": "dev.jta.demo20.botao"' ]; then
+    echo "ERRO: -Ajta.resourcesDir nao foi respeitado (esperava 'dev.jta.demo20.botao'), veio $GERADO"
+    exit 1
+fi
+echo "OK: jta.config.toml lido de um diretorio separado de CLASS_OUTPUT via -Ajta.resourcesDir."
+
+echo
+echo "==> Testando -Ajta.resourcesDir autoritativo: templateUrl ausente do dir declarado falha, mesmo se existisse em CLASS_OUTPUT"
+mkdir -p "$BUILD/e2e-gradle-strict/src/dev/jta/demo21" "$BUILD/e2e-gradle-strict/classes/jta-templates/dev/jta/demo21" "$BUILD/e2e-gradle-strict/resources" "$BUILD/e2e-gradle-strict/sources"
+# arquivo existe em CLASS_OUTPUT (onde o Maven o encontraria) mas o dir
+# resources declarado (o do Gradle) esta vazio - o processor NAO deve cair
+# de volta para CLASS_OUTPUT quando -Ajta.resourcesDir foi passado, senao
+# um ficheiro em falta no layout Gradle real voltaria a falhar em silencio.
+cat > "$BUILD/e2e-gradle-strict/classes/jta-templates/dev/jta/demo21/Saudacao.jta" << 'EOF'
+<div><h1>Ola, {{ nome }}!</h1></div>
+EOF
+cat > "$BUILD/e2e-gradle-strict/src/dev/jta/demo21/Saudacao.java" << 'EOF'
+package dev.jta.demo21;
+import dev.jta.core.AComponent;
+@AComponent(templateUrl = "Saudacao.jta")
+public class Saudacao {
+    public String nome = "mundo";
+}
+EOF
+if javac -cp "$BUILD/core-classes" \
+      -processorpath "$BUILD/processor-classes:$BUILD/core-classes:$BUILD/template-transform-classes" \
+      -Ajta.resourcesDir="$BUILD/e2e-gradle-strict/resources" \
+      -d "$BUILD/e2e-gradle-strict/classes" -s "$BUILD/e2e-gradle-strict/sources" \
+      "$BUILD/e2e-gradle-strict/src/dev/jta/demo21/Saudacao.java" 2>"$BUILD/gradle-strict-output.txt"; then
+    echo "ERRO: deveria ter falhado - Saudacao.jta nao existe no resourcesDir declarado, so em CLASS_OUTPUT!"
+    exit 1
+else
+    echo "OK, build falhou como esperado (sem fallback silencioso para CLASS_OUTPUT quando -Ajta.resourcesDir foi passado):"
+    cat "$BUILD/gradle-strict-output.txt"
+fi
+
+echo
+echo "==> Testando ReservedFieldNames: @Bindable num nome reservado ao runtime falha o build"
+mkdir -p "$BUILD/e2e-reserved/src/dev/jta/demo22" "$BUILD/e2e-reserved/classes" "$BUILD/e2e-reserved/sources"
+cat > "$BUILD/e2e-reserved/src/dev/jta/demo22/ComponenteRuim.java" << 'EOF'
+package dev.jta.demo22;
+import dev.jta.core.AComponent;
+import dev.jta.core.Bindable;
+@AComponent(template = "<div>oi</div>")
+public class ComponenteRuim {
+    @Bindable
+    public String flashSuccess = "";
+}
+EOF
+if javac -cp "$BUILD/core-classes" \
+      -processorpath "$BUILD/processor-classes:$BUILD/core-classes:$BUILD/template-transform-classes" \
+      -d "$BUILD/e2e-reserved/classes" -s "$BUILD/e2e-reserved/sources" \
+      "$BUILD/e2e-reserved/src/dev/jta/demo22/ComponenteRuim.java" 2>"$BUILD/reserved-output.txt"; then
+    echo "ERRO: deveria ter falhado - 'flashSuccess' e um nome reservado ao runtime!"
+    exit 1
+else
+    echo "OK, build falhou como esperado (fail-closed em vez de deixar o dev descobrir depois):"
+    cat "$BUILD/reserved-output.txt"
+fi
+
+echo
+echo "==> Testando ReservedFieldNames: campo so interpolado com nome reservado nao vira bindavel (mass-assignment via flash, achado da auditoria)"
+mkdir -p "$BUILD/e2e-reserved2/src/dev/jta/demo23" "$BUILD/e2e-reserved2/classes" "$BUILD/e2e-reserved2/sources"
+cat > "$BUILD/e2e-reserved2/src/dev/jta/demo23/ComponenteComFlash.java" << 'EOF'
+package dev.jta.demo23;
+import dev.jta.core.AComponent;
+@AComponent(template = "<div>{{ flashSuccess }}</div>")
+public class ComponenteComFlash {
+    public String flashSuccess = "";
+}
+EOF
+javac -cp "$BUILD/core-classes" \
+      -processorpath "$BUILD/processor-classes:$BUILD/core-classes:$BUILD/template-transform-classes" \
+      -d "$BUILD/e2e-reserved2/classes" -s "$BUILD/e2e-reserved2/sources" \
+      "$BUILD/e2e-reserved2/src/dev/jta/demo23/ComponenteComFlash.java"
+JSON=$(cat "$BUILD/e2e-reserved2/classes/META-INF/jta/components.json")
+echo "$JSON" | grep '"bindableFields"'
+if echo "$JSON" | grep -q 'flashSuccess'; then
+    echo "ERRO: 'flashSuccess' interpolado nao deveria ter entrado em bindableFields - reabre mass-assignment!"
+    exit 1
+fi
+echo "OK: campo com nome reservado, mesmo interpolado no template, nunca vira bindavel via requisicao."
 
 echo "==> Tudo validado com sucesso."
