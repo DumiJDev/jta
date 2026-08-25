@@ -6,6 +6,7 @@ import dev.jta.core.ComponentMetadataIo;
 import dev.jta.core.JtaConfig;
 import dev.jta.core.Layout;
 import dev.jta.core.AllowAnonymous;
+import dev.jta.core.CsrfExempt;
 import dev.jta.core.RequiresRole;
 import dev.jta.core.Route;
 import dev.jta.core.Sse;
@@ -260,10 +261,12 @@ public class JtaAnnotationProcessor extends AbstractProcessor {
             }
         }
 
+        boolean csrfExempt = type.getAnnotation(CsrfExempt.class) != null;
+
         allMetadata.add(new ComponentMetadata(
                 fqn, selector, explicit, routePath, List.copyOf(known.actions()), generatedRelativePath,
                 scopedCss, false, layoutFqn, security.roles(), security.allowAnonymous(), ssePath, sseIntervalMillis,
-                List.copyOf(bindableFields)));
+                List.copyOf(bindableFields), csrfExempt));
     }
 
     private record Security(List<String> roles, boolean allowAnonymous) {
@@ -366,7 +369,7 @@ public class JtaAnnotationProcessor extends AbstractProcessor {
 
         allMetadata.add(new ComponentMetadata(
                 fqn, selector, false, null, List.copyOf(known.actions()), generatedRelativePath,
-                scopedCss, true, null, List.of(), false, null, 0, List.of()));
+                scopedCss, true, null, List.of(), false, null, 0, List.of(), false));
     }
 
     private String resolveSelector(String explicitSelector, String fqn, TypeElement type) {

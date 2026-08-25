@@ -100,12 +100,18 @@ class JtaRouteRegistrar implements InitializingBean {
         Map<String, String> pathVariables =
                 (Map<String, String>) request.getAttribute(HandlerMapping.URI_TEMPLATE_VARIABLES_ATTRIBUTE);
 
-        PageResult result = dispatcher.dispatch(metadata, request.getParameterMap(), pathVariables, SpringCurrentUser.current());
+        String cookieHeader = request.getHeader("Cookie");
+        PageResult result = dispatcher.dispatch(metadata, request.getParameterMap(), pathVariables,
+                SpringCurrentUser.current(), new ServletJtaSession(request.getSession(true)), cookieHeader);
 
         if (result instanceof PageResult.Forbidden) {
             return ResponseEntity.status(HttpStatus.FORBIDDEN).build();
         }
         PageResult.Rendered rendered = (PageResult.Rendered) result;
-        return ResponseEntity.ok().contentType(MediaType.TEXT_HTML).body(rendered.html());
+        ResponseEntity.BodyBuilder response = ResponseEntity.ok().contentType(MediaType.TEXT_HTML);
+        if (rendered.csrfSetCookieHeader() != null) {
+            response.header("Set-Cookie", rendered.csrfSetCookieHeader());
+        }
+        return response.body(rendered.html());
     }
 }

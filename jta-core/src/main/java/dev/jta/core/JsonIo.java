@@ -47,7 +47,8 @@ final class JsonIo {
             sb.append("    \"allowAnonymous\": ").append(m.allowAnonymous()).append(",\n");
             sb.append("    \"ssePath\": ").append(quoteNullable(m.ssePath())).append(",\n");
             sb.append("    \"sseIntervalMillis\": ").append(m.sseIntervalMillis()).append(",\n");
-            sb.append("    \"bindableFields\": ").append(writeStringArray(m.bindableFields())).append("\n");
+            sb.append("    \"bindableFields\": ").append(writeStringArray(m.bindableFields())).append(",\n");
+            sb.append("    \"csrfExempt\": ").append(m.csrfExempt()).append("\n");
             sb.append("  }");
             if (i < items.size() - 1) {
                 sb.append(",");
@@ -91,6 +92,7 @@ final class JsonIo {
         List<String> bindableFields = List.of();
         List<String> actions = List.of();
         List<String> requiredRoles = List.of();
+        boolean csrfExempt = false;
 
         c.skipWhitespace();
         while (c.peek() != '}') {
@@ -114,6 +116,7 @@ final class JsonIo {
                 case "ssePath" -> ssePath = c.readNullableString();
                 case "sseIntervalMillis" -> sseIntervalMillis = c.readLong();
                 case "bindableFields" -> bindableFields = c.readStringArray();
+                case "csrfExempt" -> csrfExempt = c.readBoolean();
                 default -> c.skipValue();
             }
             c.skipWhitespace();
@@ -124,7 +127,8 @@ final class JsonIo {
         }
         c.expect('}');
         return new ComponentMetadata(fqn, selector, explicitSelector, routePath, actions, template, scopedCss,
-                isLayout, layoutFqn, requiredRoles, allowAnonymous, ssePath, sseIntervalMillis, bindableFields);
+                isLayout, layoutFqn, requiredRoles, allowAnonymous, ssePath, sseIntervalMillis, bindableFields,
+                csrfExempt);
     }
 
     private static String writeStringArray(List<String> values) {

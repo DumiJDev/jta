@@ -2,6 +2,8 @@ package dev.jta.spring;
 
 import dev.jta.runtime.ActionResult;
 import dev.jta.runtime.JtaActionDispatcher;
+import dev.jta.runtime.csrf.CsrfRequest;
+import dev.jta.runtime.csrf.CsrfTokenStore;
 import jakarta.servlet.http.HttpServletRequest;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -17,10 +19,11 @@ import org.springframework.web.bind.annotation.RestController;
  * Endpoint generico de acoes HTMX: {@code POST /__jta/action/{selector}?action=...}.
  *
  * <p>Adaptador fino: so extrai os dados da {@link HttpServletRequest},
- * delega toda a orquestracao (resolucao do componente, autorizacao,
- * allowlist de acoes, validacao, invocacao, render) para
- * {@link JtaActionDispatcher} (jta-runtime, agnostico de framework), e
- * traduz o {@link ActionResult} devolvido para {@link ResponseEntity}.
+ * delega toda a orquestracao (verificacao de CSRF, resolucao do
+ * componente, autorizacao, allowlist de acoes, validacao, invocacao,
+ * render) para {@link JtaActionDispatcher} (jta-runtime, agnostico de
+ * framework), e traduz o {@link ActionResult} devolvido para
+ * {@link ResponseEntity}.
  */
 @RestController
 class JtaActionController {
@@ -28,16 +31,23 @@ class JtaActionController {
     private static final Logger LOG = LoggerFactory.getLogger(JtaActionController.class);
 
     private final JtaActionDispatcher dispatcher;
+    private final CsrfTokenStore csrfTokenStore;
 
-    JtaActionController(JtaActionDispatcher dispatcher) {
+    JtaActionController(JtaActionDispatcher dispatcher, CsrfTokenStore csrfTokenStore) {
         this.dispatcher = dispatcher;
+        this.csrfTokenStore = csrfTokenStore;
     }
 
     @PostMapping("/__jta/action/{selector}")
     ResponseEntity<String> handleAction(@PathVariable("selector") String selector,
                                          @RequestParam("action") String action,
                                          HttpServletRequest request) {
-        ActionResult result = dispatcher.dispatch(selector, action, request.getParameterMap(), SpringCurrentUser.current());
+        String cookieHeader = request.getHeader("Cookie");
+        String csrfHeaderValue = request.getHeader(csrfTokenStore.headerName());
+        CsrfRequest csrf = new CsrfRequest(cookieHeader, csrfHeaderValue);
+
+        ActionResult result = dispatcher.dispatch(selector, action, request.getParameterMap(),
+                SpringCurrentUser.current(), new ServletJtaSession(request.getSession(true)), csrf);
 
         if (result instanceof ActionResult.Forbidden) {
             return ResponseEntity.status(HttpStatus.FORBIDDEN).build();

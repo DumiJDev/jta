@@ -3,6 +3,9 @@ package dev.jta.runtime;
 import dev.jta.core.ComponentMetadata;
 import dev.jta.core.ComponentRegistry;
 import dev.jta.core.JtaConfig;
+import dev.jta.runtime.csrf.CsrfToken;
+import dev.jta.runtime.csrf.CsrfTokenStore;
+import dev.jta.runtime.session.JtaSession;
 import gg.jte.TemplateEngine;
 import gg.jte.output.StringOutput;
 
@@ -13,8 +16,9 @@ import java.util.Set;
 /**
  * Orquestra a renderizacao de uma pagina (componente com {@code @Route}),
  * agnostico de framework web: autoriza, reidrata o estado a partir de
- * query params + path variables, chama {@code init()} se declarado,
- * renderiza (compondo com {@code @Layout} quando presente) e envolve no
+ * query params + path variables (mais a sessao resolvida pelo adaptador),
+ * chama {@code init()} se declarado, renderiza (compondo com
+ * {@code @Layout} quando presente), emite/renova o token CSRF e envolve no
  * documento HTML completo via {@code PageShellRenderer}.
  *
  * <p>Casamento de padrao de rota (qual {@link ComponentMetadata} responde
@@ -25,6 +29,12 @@ import java.util.Set;
  * {@code JtaRouteRegistrar} em jta-spring-boot-starter para o adaptador
  * Spring MVC completo (registro de rota + extracao de path
  * variables/query params da {@code HttpServletRequest}).
+ *
+ * <p><b>CSRF (ver SECURITY.md, achado #6):</b> GET e seguro por definicao,
+ * entao esta classe nunca verifica CSRF - so emite/renova o token via
+ * {@link CsrfTokenStore#issue}, para o {@code PageShellRenderer} embutir no
+ * {@code hx-headers} do {@code <body>} e o adaptador aplicar o
+ * {@code Set-Cookie} resultante (ver {@code PageResult.Rendered}).
  *
  * <p>Extraido de {@code JtaRouteRegistrar} (jta-spring-boot-starter) na
  * extracao do nucleo agnostico - mesma sequencia de passos, incluindo a
@@ -37,17 +47,20 @@ public final class JtaPageDispatcher {
     private final ComponentInvoker invoker;
     private final TemplateEngine templateEngine;
     private final JtaConfig config;
+    private final CsrfTokenStore csrfTokenStore;
 
     public JtaPageDispatcher(ComponentRegistry registry, ComponentInvoker invoker, TemplateEngine templateEngine,
-                              JtaConfig config) {
+                              JtaConfig config, CsrfTokenStore csrfTokenStore) {
         this.registry = registry;
         this.invoker = invoker;
         this.templateEngine = templateEngine;
         this.config = config;
+        this.csrfTokenStore = csrfTokenStore;
     }
 
     public PageResult dispatch(ComponentMetadata metadata, Map<String, String[]> queryParams,
-                                Map<String, String> pathVariables, CurrentUser user) {
+                                Map<String, String> pathVariables, CurrentUser user, JtaSession session,
+                                String cookieHeader) {
         if (!SecurityEnforcer.isAuthorized(metadata, user)) {
             return new PageResult.Forbidden();
         }
@@ -66,6 +79,7 @@ public final class JtaPageDispatcher {
         Set<String> bindableFields = Set.copyOf(metadata.bindableFields());
         invoker.populateFromParams(instance, queryParams, bindableFields);
         invoker.populateFromPathVariables(instance, pathVariables, bindableFields);
+        invoker.applySession(instance, session);
         invoker.callInitIfPresent(instance);
 
         StringOutput pageOutput = new StringOutput();
@@ -74,8 +88,12 @@ public final class JtaPageDispatcher {
 
         String bodyHtml = metadata.hasLayout() ? renderWithLayout(metadata, pageHtml) : pageHtml;
 
-        String fullPage = PageShellRenderer.wrap(bodyHtml, registry, config);
-        return new PageResult.Rendered(fullPage);
+        CsrfTokenStore.IssueResult issued = csrfTokenStore.issue(cookieHeader);
+        CsrfToken csrfToken = issued.tokenValue() == null ? null
+                : new CsrfToken(csrfTokenStore.headerName(), issued.tokenValue());
+
+        String fullPage = PageShellRenderer.wrap(bodyHtml, registry, config, csrfToken);
+        return new PageResult.Rendered(fullPage, issued.setCookieHeaderOrNull());
     }
 
     /**

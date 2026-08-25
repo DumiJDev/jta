@@ -3,6 +3,7 @@ package dev.jta.runtime;
 import dev.jta.core.ComponentMetadata;
 import dev.jta.core.ComponentRegistry;
 import dev.jta.core.JtaConfig;
+import dev.jta.runtime.csrf.CsrfToken;
 
 /**
  * Monta o documento HTML completo para uma requisicao de pagina
@@ -182,7 +183,7 @@ final class PageShellRenderer {
     private PageShellRenderer() {
     }
 
-    static String wrap(String bodyHtml, ComponentRegistry registry, JtaConfig config) {
+    static String wrap(String bodyHtml, ComponentRegistry registry, JtaConfig config, CsrfToken csrfToken) {
         boolean tailwind = config.getBoolean("features", "tailwindcss", false);
 
         StringBuilder css = new StringBuilder();
@@ -206,6 +207,19 @@ final class PageShellRenderer {
         // "adequado para prototipagem, nao para producao").
         String tailwindScriptTag = tailwind ? "  <script src=\"" + TAILWIND_CDN_URL + "\"></script>\n" : "";
 
+        // Sacada que dispensa JS escrito pelo dev (ver SECURITY.md, achado
+        // #6): o servidor ja sabe o valor do token no momento de renderizar
+        // a pagina, entao escreve-o literalmente aqui - o HTMX propaga
+        // hx-headers a todo pedido disparado por um elemento descendente do
+        // <body> (procura o atributo subindo a arvore), cobrindo
+        // automaticamente todo hx-post gerado pelo TemplateTransformer sem
+        // nenhuma leitura de cookie no browser. Ausente em modo
+        // csrf_mode=disabled (csrfToken == null nesse caso).
+        String hxHeadersAttr = csrfToken == null
+                ? ""
+                : " hx-headers='{\"" + escapeForHtmlAttribute(csrfToken.headerName()) + "\":\""
+                        + escapeForHtmlAttribute(csrfToken.value()) + "\"}'";
+
         return "<!DOCTYPE html>\n"
                 + "<html lang=\"pt\">\n"
                 + "<head>\n"
@@ -215,9 +229,25 @@ final class PageShellRenderer {
                 + tailwindScriptTag
                 + "  <style>\n" + css + "  </style>\n"
                 + "</head>\n"
-                + "<body hx-boost=\"true\">\n"
+                + "<body hx-boost=\"true\"" + hxHeadersAttr + ">\n"
                 + bodyHtml + "\n"
                 + "</body>\n"
                 + "</html>\n";
+    }
+
+    /**
+     * Escaping minimo para embutir um valor dentro de um atributo HTML
+     * delimitado por aspas simples (o {@code hx-headers} acima usa aspas
+     * simples porque o JSON dentro dele ja usa aspas duplas). O valor do
+     * token e sempre base64url gerado pelo proprio {@code HmacCsrfTokenStore}
+     * (alfabeto seguro, sem aspas/barras), mas {@code headerName} vem de
+     * config editavel pelo dev - escapado por defesa em profundidade.
+     */
+    private static String escapeForHtmlAttribute(String value) {
+        return value.replace("&", "&amp;")
+                .replace("'", "&#39;")
+                .replace("\"", "&quot;")
+                .replace("<", "&lt;")
+                .replace(">", "&gt;");
     }
 }

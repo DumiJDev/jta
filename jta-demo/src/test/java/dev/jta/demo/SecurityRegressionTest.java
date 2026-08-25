@@ -14,6 +14,10 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.util.LinkedMultiValueMap;
 import org.springframework.util.MultiValueMap;
 
+import java.util.List;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
+
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
@@ -33,14 +37,110 @@ class SecurityRegressionTest {
         return "http://localhost:" + port;
     }
 
+    private static final Pattern CSRF_TOKEN_PATTERN =
+            Pattern.compile("hx-headers='\\{\"X-JTA-CSRF-Token\":\"([^\"]+)\"}'");
+
+    private record Csrf(String cookie, String headerValue) {
+    }
+
+    /**
+     * Fluxo real de CSRF nativo (ver SECURITY.md, achado #6): GET de uma
+     * pagina publica (catalogo de turmas, sem autenticacao) emite a cookie
+     * assinada e embute o token no {@code hx-headers} do {@code <body>} -
+     * o token nao esta amarrado a nenhum componente/pagina especifica,
+     * entao serve para autorizar POSTs a qualquer acao, contanto que
+     * venham do MESMO cliente (mesma cookie).
+     */
+    private Csrf fetchCsrf(TestRestTemplate client) {
+        ResponseEntity<String> response = client.getForEntity(baseUrl() + "/turmas", String.class);
+        List<String> setCookies = response.getHeaders().get(HttpHeaders.SET_COOKIE);
+        String setCookie = (setCookies == null ? List.<String>of() : setCookies).stream()
+                .filter(v -> v.startsWith("jta_csrf="))
+                .findFirst()
+                .orElseThrow(() -> new IllegalStateException("GET /turmas nao emitiu Set-Cookie de CSRF: " + setCookies));
+        String cookie = setCookie.split(";", 2)[0];
+        Matcher matcher = CSRF_TOKEN_PATTERN.matcher(response.getBody());
+        if (!matcher.find()) {
+            throw new IllegalStateException("token CSRF nao encontrado no hx-headers: " + response.getBody());
+        }
+        return new Csrf(cookie, matcher.group(1));
+    }
+
+    /** POST de acao com o fluxo de CSRF valido (cookie + header) - o caminho feliz usado pela maioria dos testes. */
     private ResponseEntity<String> postAction(TestRestTemplate client, String fqn, String action,
                                                MultiValueMap<String, String> form) {
+        Csrf csrf = fetchCsrf(client);
+        return postActionRaw(client, fqn, action, form, csrf.cookie(), csrf.headerValue());
+    }
+
+    /** POST de acao com controle total sobre cookie/header de CSRF (ou ausencia deles) - para os testes de regressao de CSRF. */
+    private ResponseEntity<String> postActionRaw(TestRestTemplate client, String fqn, String action,
+                                                  MultiValueMap<String, String> form, String cookie, String csrfHeaderValue) {
         String selector = SelectorDerivation.derive(fqn);
         HttpHeaders headers = new HttpHeaders();
         headers.setContentType(MediaType.APPLICATION_FORM_URLENCODED);
+        if (cookie != null) {
+            headers.add(HttpHeaders.COOKIE, cookie);
+        }
+        if (csrfHeaderValue != null) {
+            headers.add("X-JTA-CSRF-Token", csrfHeaderValue);
+        }
         HttpEntity<MultiValueMap<String, String>> request = new HttpEntity<>(form, headers);
         return client.exchange(baseUrl() + "/__jta/action/" + selector + "?action=" + action,
                 HttpMethod.POST, request, String.class);
+    }
+
+    // --- SECURITY.md achado #6 (CSRF nativo) ---
+
+    @Test
+    void getDePaginaEmiteCookieDeCsrfEHtmlContemHxHeadersComOMesmoToken() {
+        ResponseEntity<String> response = rest.getForEntity(baseUrl() + "/turmas", String.class);
+        List<String> setCookies = response.getHeaders().get(HttpHeaders.SET_COOKIE);
+        assertThat(setCookies).isNotNull();
+        assertThat(setCookies).anyMatch(v -> v.startsWith("jta_csrf="));
+        Matcher matcher = CSRF_TOKEN_PATTERN.matcher(response.getBody());
+        assertThat(matcher.find()).isTrue();
+    }
+
+    @Test
+    void postSemCookieNemHeaderCsrfENegado() {
+        ResponseEntity<String> response = postActionRaw(rest, "dev.jta.demo.SecurityProbe", "tocar",
+                new LinkedMultiValueMap<>(), null, null);
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.FORBIDDEN);
+    }
+
+    @Test
+    void postComCookieMasSemHeaderCsrfENegado() {
+        Csrf csrf = fetchCsrf(rest);
+        ResponseEntity<String> response = postActionRaw(rest, "dev.jta.demo.SecurityProbe", "tocar",
+                new LinkedMultiValueMap<>(), csrf.cookie(), null);
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.FORBIDDEN);
+    }
+
+    @Test
+    void postComHeaderMasSemCookieCsrfENegado() {
+        Csrf csrf = fetchCsrf(rest);
+        ResponseEntity<String> response = postActionRaw(rest, "dev.jta.demo.SecurityProbe", "tocar",
+                new LinkedMultiValueMap<>(), null, csrf.headerValue());
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.FORBIDDEN);
+    }
+
+    @Test
+    void postComCookieForjadaComOutroSegredoENegado() {
+        // simula um token "de outra origem": mesmo formato (token.assinatura),
+        // mas a assinatura nunca bateria com HMAC-SHA256(segredo-real, token) -
+        // o cenario que o double-submit assinado existe para barrar.
+        Csrf csrf = fetchCsrf(rest);
+        String forgedCookie = "jta_csrf=" + csrf.headerValue() + ".assinatura-forjada-de-outra-origem";
+        ResponseEntity<String> response = postActionRaw(rest, "dev.jta.demo.SecurityProbe", "tocar",
+                new LinkedMultiValueMap<>(), forgedCookie, csrf.headerValue());
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.FORBIDDEN);
+    }
+
+    @Test
+    void fluxoFelizGetDepoisPostComCookieETokenExtraidosDoHtmlFunciona() {
+        ResponseEntity<String> response = postAction(rest, "dev.jta.demo.SecurityProbe", "tocar", new LinkedMultiValueMap<>());
+        assertThat(response.getStatusCode().is2xxSuccessful()).isTrue();
     }
 
     // SECURITY.md achado #1 (CRITICO): so metodos void que o processor

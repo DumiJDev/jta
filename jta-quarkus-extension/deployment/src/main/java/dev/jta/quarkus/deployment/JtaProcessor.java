@@ -9,6 +9,7 @@ import io.quarkus.deployment.annotations.BuildStep;
 import io.quarkus.deployment.annotations.ExecutionTime;
 import io.quarkus.deployment.annotations.Record;
 import io.quarkus.deployment.builditem.FeatureBuildItem;
+import io.quarkus.vertx.core.deployment.CoreVertxBuildItem;
 import io.quarkus.vertx.http.deployment.RouteBuildItem;
 import io.vertx.core.http.HttpMethod;
 import io.vertx.ext.web.handler.BodyHandler;
@@ -50,9 +51,21 @@ class JtaProcessor {
 
     @BuildStep
     @Record(ExecutionTime.RUNTIME_INIT)
-    void routes(JtaRecorder recorder, BuildProducer<RouteBuildItem> routes) {
+    void routes(JtaRecorder recorder, CoreVertxBuildItem vertx, BuildProducer<RouteBuildItem> routes) {
         ClassLoader classLoader = Thread.currentThread().getContextClassLoader();
         ComponentRegistry registry = ComponentRegistry.loadFromClasspath(classLoader);
+
+        // SessionHandler (LocalSessionStore - ja transitivo de
+        // quarkus-vertx-http, nao e dependencia nova) PRIMEIRO: os handlers
+        // de pagina/acao abaixo chamam RoutingContext.session() (ver
+        // VertxJtaSession) e precisam encontra-lo ja populado. Vert.x Web
+        // executa, em ordem de registro, toda rota cujo path+metodo casem -
+        // "/*" casa qualquer path/metodo, entao precisa ser produzido antes
+        // de tudo o mais.
+        routes.produce(RouteBuildItem.builder()
+                .route("/*")
+                .handler(recorder.createSessionHandler(vertx.getVertx()))
+                .build());
 
         for (ComponentMetadata page : registry.pages()) {
             String vertxPath = toVertxPath(page.routePath());

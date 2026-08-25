@@ -3,6 +3,7 @@ package dev.jta.javalin;
 import dev.jta.runtime.ComponentFactory;
 import dev.jta.runtime.CurrentUser;
 import dev.jta.runtime.ReflectionComponentFactory;
+import dev.jta.runtime.csrf.CsrfTokenStore;
 import io.javalin.http.Context;
 import jakarta.validation.Validator;
 
@@ -23,6 +24,7 @@ public final class JtaJavalinConfig {
     private ComponentFactory componentFactory = new ReflectionComponentFactory();
     private Function<Context, CurrentUser> currentUserResolver = ctx -> CurrentUser.anonymous();
     private Validator validator;
+    private CsrfTokenStore csrfTokenStore;
 
     public static JtaJavalinConfig create() {
         return new JtaJavalinConfig();
@@ -43,6 +45,12 @@ public final class JtaJavalinConfig {
         return this;
     }
 
+    /** Override do {@link CsrfTokenStore} - por default, construido a partir de {@code [security]} em jta.config.toml (ver {@link JtaJavalin#register}). */
+    public JtaJavalinConfig csrfTokenStore(CsrfTokenStore csrfTokenStore) {
+        this.csrfTokenStore = csrfTokenStore;
+        return this;
+    }
+
     ComponentFactory componentFactory() {
         return componentFactory;
     }
@@ -53,5 +61,9 @@ public final class JtaJavalinConfig {
 
     Validator validator() {
         return validator;
+    }
+
+    CsrfTokenStore csrfTokenStore() {
+        return csrfTokenStore;
     }
 }

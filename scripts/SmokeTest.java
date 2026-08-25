@@ -48,7 +48,8 @@ public class SmokeTest {
                 false,
                 "/live",
                 5000L,
-                List.of("valor", "titulo")
+                List.of("valor", "titulo"),
+                false
         );
         String json = ComponentMetadataIo.toJson(List.of(original));
         List<ComponentMetadata> parsed = ComponentMetadataIo.fromJson(json);
@@ -75,7 +76,7 @@ public class SmokeTest {
         // component with no route (not a page) and no style
         ComponentMetadata partial = new ComponentMetadata(
                 "dev.jta.demo.Button", "jta-demo-button", true, null, List.of(), "dev/jta/demo/Button.jte", null,
-                false, null, List.of(), true, null, 0L, List.of());
+                false, null, List.of(), true, null, 0L, List.of(), false);
         List<ComponentMetadata> parsedPartial = ComponentMetadataIo.fromJson(ComponentMetadataIo.toJson(List.of(partial)));
         checkTrue("null routePath round-trips as null", parsedPartial.get(0).routePath() == null);
         checkTrue("non-page isPage() is false", !parsedPartial.get(0).isPage());
@@ -87,7 +88,7 @@ public class SmokeTest {
         // a layout itself
         ComponentMetadata layout = new ComponentMetadata(
                 "dev.jta.demo.SiteLayout", "dev-jta-demo-site-layout", false, null, List.of(),
-                "dev/jta/demo/SiteLayout.jte", null, true, null, List.of(), false, null, 0L, List.of());
+                "dev/jta/demo/SiteLayout.jte", null, true, null, List.of(), false, null, 0L, List.of(), false);
         List<ComponentMetadata> parsedLayout = ComponentMetadataIo.fromJson(ComponentMetadataIo.toJson(List.of(layout)));
         checkTrue("layout isLayout() true", parsedLayout.get(0).isLayout());
         checkTrue("layout isPage() false (no routePath)", !parsedLayout.get(0).isPage());
