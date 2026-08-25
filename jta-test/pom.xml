@@ -10,15 +10,22 @@
         <version>0.1.0-SNAPSHOT</version>
     </parent>
 
-    <artifactId>jta-javalin-starter</artifactId>
+    <artifactId>jta-test</artifactId>
     <packaging>jar</packaging>
-    <name>jta-javalin-starter</name>
+    <name>jta-test</name>
     <description>
-        Integracao do JTA com Javalin: camada fina de traducao HTTP sobre
-        jta-runtime (sem container de DI - Javalin nao tem um). Carrega o
-        ComponentRegistry gerado em compile-time, registra as paginas de
-        @Route direto no Javalin, e expoe o endpoint generico de acoes HTMX
-        (/__jta/action/{selector}).
+        Utilitarios de teste para quem constroi aplicacoes EM CIMA do JTA
+        (nao para testar o proprio framework - isso ja e coberto pelos
+        testes internos de cada modulo). Instancia um componente isolado,
+        popula estado como uma requisicao real faria (respeitando o
+        allowlist de bindableFields), invoca acoes/renderiza via
+        JtaPageDispatcher/JtaActionDispatcher (o mesmo caminho de codigo
+        que roda em producao - nenhuma logica de dispatch e duplicada
+        aqui), e oferece asserts prontos sobre PageResult/ActionResult.
+        Puramente aditivo: nao muda nada em jta-core/jta-runtime, que ja
+        sao agnosticos de framework - ver package-info.java para o
+        raciocinio completo e para o que fica de fora deste corte
+        (mock de CSRF/sessao).
     </description>
 
     <dependencies>
@@ -33,17 +40,6 @@
             <version>${project.version}</version>
         </dependency>
         <dependency>
-            <groupId>io.github.dumijdev</groupId>
-            <artifactId>jta-processor</artifactId>
-            <version>${project.version}</version>
-            <!-- entra como annotation processor nos consumidores, nunca em runtime -->
-            <scope>provided</scope>
-        </dependency>
-        <dependency>
-            <groupId>io.javalin</groupId>
-            <artifactId>javalin</artifactId>
-        </dependency>
-        <dependency>
             <groupId>gg.jte</groupId>
             <artifactId>jte</artifactId>
         </dependency>
@@ -52,19 +48,25 @@
             <artifactId>jakarta.validation-api</artifactId>
         </dependency>
         <dependency>
-            <groupId>org.slf4j</groupId>
-            <artifactId>slf4j-api</artifactId>
+            <!-- entra como annotation processor nos consumidores, nunca em runtime -
+                 aqui so para compilar o fixture usado pelos proprios testes deste modulo. -->
+            <groupId>io.github.dumijdev</groupId>
+            <artifactId>jta-processor</artifactId>
+            <version>${project.version}</version>
+            <scope>provided</scope>
         </dependency>
         <dependency>
+            <!--
+                JUnit so em escopo test, nunca exposto a quem depende de
+                jta-test: os asserts em JtaAssertions lancam AssertionError
+                puro (tipo do proprio JDK), reconhecido por qualquer runner
+                (JUnit, TestNG, AssertJ como causa) - jta-test nao deveria
+                forcar JUnit especificamente em quem prefere outro runner,
+                mesma filosofia de jta-runtime ser agnostico de framework
+                web (ver package-info.java).
+            -->
             <groupId>org.junit.jupiter</groupId>
             <artifactId>junit-jupiter</artifactId>
-            <scope>test</scope>
-        </dependency>
-        <dependency>
-            <!-- servidor Jetty embutido do Javalin - so em teste, ja que o
-                 consumidor real declara isto na sua propria app -->
-            <groupId>org.slf4j</groupId>
-            <artifactId>slf4j-simple</artifactId>
             <scope>test</scope>
         </dependency>
     </dependencies>
@@ -72,8 +74,8 @@
     <build>
         <plugins>
             <plugin>
-                <!-- so para os fixtures de teste deste modulo (JtaJavalinIntegrationTest) -
-                     um consumidor real declara isto na propria app, como o jta-demo ja faz. -->
+                <!-- so para o fixture de teste deste modulo (JtaTestHarnessTest) -
+                     um consumidor real ja tem isto configurado na propria app. -->
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-compiler-plugin</artifactId>
                 <configuration>

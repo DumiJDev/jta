@@ -1,6 +1,10 @@
 target/
 *.class
 
+# jta-gradle-plugin (unico modulo Gradle do repo - o resto e Maven/target)
+jta-gradle-plugin/build/
+jta-gradle-plugin/.gradle/
+
 # Build/IDE
 .idea/
 *.iml

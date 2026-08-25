@@ -11,6 +11,7 @@ import dev.jta.runtime.CurrentUser;
 import dev.jta.runtime.JtaActionDispatcher;
 import dev.jta.runtime.JtaErrorPageRenderer;
 import dev.jta.runtime.JtaPageDispatcher;
+import dev.jta.runtime.JtaTemplateEngineFactory;
 import dev.jta.runtime.PageResult;
 import dev.jta.runtime.csrf.CsrfRequest;
 import dev.jta.runtime.csrf.CsrfTokenStore;
@@ -70,15 +71,17 @@ public final class JtaHttpServer {
      * <p><b>Importante:</b> tal como nos outros adaptadores, o consumidor
      * precisa configurar o {@code jte-maven-plugin} (goal {@code precompile})
      * no seu proprio build apontado para o output do {@code jta-processor} -
-     * {@link TemplateEngine#createPrecompiled} carrega essas classes ja
-     * compiladas via classloader, nao recompila {@code .jte} em runtime.
+     * {@link JtaTemplateEngineFactory} usa {@link TemplateEngine#createPrecompiled}
+     * por padrao (carrega essas classes ja compiladas via classloader), e so
+     * troca para o dev-loop (recompilacao sob demanda) se explicitamente
+     * ligado - ver o javadoc daquela classe.
      */
     public static JtaHttpServer create(int port, JtaStandaloneConfig config) {
         try {
             ClassLoader classLoader = Thread.currentThread().getContextClassLoader();
             ComponentRegistry registry = ComponentRegistry.loadFromClasspath(classLoader);
             JtaConfig jtaConfig = JtaConfig.loadFromClasspath(classLoader);
-            TemplateEngine templateEngine = TemplateEngine.createPrecompiled(gg.jte.ContentType.Html);
+            TemplateEngine templateEngine = JtaTemplateEngineFactory.create(jtaConfig, classLoader);
 
             CsrfTokenStore csrfTokenStore = config.csrfTokenStore() != null
                     ? config.csrfTokenStore() : CsrfTokenStoreFactory.create(jtaConfig);

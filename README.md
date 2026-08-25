@@ -133,6 +133,74 @@ mvn verify                # suíte completa, incluindo testes de integração e 
 
 CI (`.github/workflows/build.yml`) roda `mvn verify` a cada push/PR.
 
+**Testando a sua aplicação** (não o framework): o módulo `jta-test`
+oferece `JtaTestHarness` — instancia um componente, invoca uma ação ou
+renderiza uma página exatamente pelo mesmo caminho de código que roda em
+produção (`JtaPageDispatcher`/`JtaActionDispatcher` de `jta-runtime`), sem
+precisar de um servidor HTTP real:
+
+```java
+JtaTestHarness harness = JtaTestHarness.forClasspath();
+
+ActionResult result = harness.invokeAction(Contador.class, "incrementar",
+        Map.of("valor", new String[]{"5"}), CurrentUser.anonymous());
+
+String html = JtaAssertions.assertRendered(result);
+JtaAssertions.assertContains(html, ">6<");
+```
+
+`TestCurrentUser.withRoles("ADMIN")` monta um usuário fake para testar
+`@RequiresRole`/`@AllowAnonymous` sem depender de Spring Security (ou
+qualquer outro provedor real) no classpath de teste. Adicione como
+dependência de teste:
+
+```xml
+<dependency>
+    <groupId>io.github.dumijdev</groupId>
+    <artifactId>jta-test</artifactId>
+    <version>0.1.0-SNAPSHOT</version>
+    <scope>test</scope>
+</dependency>
+```
+
+## Dev-loop (hot reload de templates)
+
+Por padrão, todo adaptador monta o `TemplateEngine` do JTE em modo
+**pré-compilado** (`jte-maven-plugin` compila os `.jte` gerados em
+bytecode durante o build — ver `## Arquitetura`) — correto e rápido para
+produção, mas cada edição de template exige recompilar e reiniciar a
+aplicação inteira.
+
+Ligando o **dev-mode**, `JtaTemplateEngineFactory` (jta-runtime) troca
+para um `DirectoryCodeResolver` do JTE apontando direto para
+`target/generated-sources/annotations/jta-templates` (onde o processor já
+escreve o `.jte` gerado) — editar um template, ou o `.jta`/`.css` externo
+que ele referencia via `templateUrl()`/`styleUrl()`, é refletido na
+próxima requisição sem restart da JVM. Duas formas de ligar (mesma
+precedência de qualquer outra configuração do JTA):
+
+```bash
+# opção 1: system property, sem tocar em arquivo versionado
+mvn -pl jta-demo spring-boot:run -Djta.dev=true
+```
+
+```toml
+# opção 2: jta.config.toml — vira o default do projeto
+[dev]
+enabled = true
+```
+
+**Importante:** isso só cobre a metade "JTE recarrega o template
+compilado". A outra metade — o `JtaAnnotationProcessor` rodar de novo
+para regenerar o `.jte` quando o *código* do componente muda (novo campo
+referenciado no template, novo `@AComponent`, etc.) — ainda depende de
+uma recompilação Java disparada de fora (build automático da IDE,
+`mvn compiler:compile` num watcher, ou build contínuo do Gradle via o
+`jta-gradle-plugin`). Ver o javadoc de `JtaTemplateEngineFactory` para o
+detalhe completo, incluindo por que o modo "on-demand" cru do JTE
+(`TemplateEngine.create` de 2 argumentos) não funciona aqui sem o
+classpath da aplicação.
+
 ## Limitações honestas
 
 - Layouts aninhados (`@Layout` usando outro `@Layout`) não são suportados.

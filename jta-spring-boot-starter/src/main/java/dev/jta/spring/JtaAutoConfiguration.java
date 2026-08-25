@@ -8,9 +8,9 @@ import dev.jta.runtime.ComponentInvoker;
 import dev.jta.runtime.JtaActionDispatcher;
 import dev.jta.runtime.JtaErrorPageRenderer;
 import dev.jta.runtime.JtaPageDispatcher;
+import dev.jta.runtime.JtaTemplateEngineFactory;
 import dev.jta.runtime.csrf.CsrfTokenStore;
 import dev.jta.runtime.csrf.CsrfTokenStoreFactory;
-import gg.jte.ContentType;
 import gg.jte.TemplateEngine;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.boot.autoconfigure.AutoConfiguration;
@@ -38,13 +38,18 @@ import java.util.Locale;
  * <p><b>Importante:</b> o {@code jte-maven-plugin} (goal {@code precompile},
  * configurado no pom do modulo consumidor) ja compila os {@code .jte}
  * gerados pelo processor em bytecode durante o build, para dentro de
- * {@code target/classes}. Por isso o {@link TemplateEngine} aqui precisa
- * estar no modo pre-compilado ({@link TemplateEngine#createPrecompiled},
- * que carrega essas classes ja compiladas via classloader - e NAO no modo
- * "on-demand" ({@link TemplateEngine#create}), que tentaria recompilar o
- * {@code .jte} em runtime a partir do source, usando um classpath isolado
- * que nao enxerga as classes da propria aplicacao (isso e exatamente o que
- * causava {@code package dev.jta.demo does not exist} em runtime).
+ * {@code target/classes}. Por isso o {@link TemplateEngine} aqui usa
+ * {@link JtaTemplateEngineFactory}, que por padrao monta o modo
+ * pre-compilado ({@link TemplateEngine#createPrecompiled}, que carrega
+ * essas classes ja compiladas via classloader) - e so troca para o modo
+ * de dev-loop (recompilacao sob demanda a partir do
+ * {@code .jte}/{@code .jta} fonte, sem restart da JVM) quando
+ * explicitamente ligado via {@code -Djta.dev=true} ou
+ * {@code [dev] enabled = true} em {@code jta.config.toml} - ver o javadoc
+ * de {@link JtaTemplateEngineFactory} para o porque o modo "on-demand" cru
+ * do JTE ({@link TemplateEngine#create}, sem o classpath da aplicacao)
+ * nao funciona aqui (causava {@code package dev.jta.demo does not exist}
+ * em runtime).
  *
  * <p><b>{@code before = ErrorMvcAutoConfiguration.class}:</b> necessario
  * para {@link JtaErrorController} (mapeado em {@code /error}) substituir o
@@ -74,8 +79,8 @@ public class JtaAutoConfiguration {
 
     @Bean
     @ConditionalOnMissingBean
-    public TemplateEngine jtaTemplateEngine() {
-        return TemplateEngine.createPrecompiled(ContentType.Html);
+    public TemplateEngine jtaTemplateEngine(JtaConfig config) {
+        return JtaTemplateEngineFactory.create(config);
     }
 
     /**
