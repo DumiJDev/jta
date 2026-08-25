@@ -62,7 +62,7 @@ class ComponentRegistryOrderingTest {
         return new ComponentMetadata(
                 fqn, selector, false, routePath,
                 List.of(), selector + ".jte", null, false, null,
-                List.of(), false, null, 0L, List.of());
+                List.of(), false, null, 0L, List.of(), false);
     }
 
     /**

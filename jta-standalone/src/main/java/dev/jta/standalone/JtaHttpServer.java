@@ -11,6 +11,12 @@ import dev.jta.runtime.CurrentUser;
 import dev.jta.runtime.JtaActionDispatcher;
 import dev.jta.runtime.JtaPageDispatcher;
 import dev.jta.runtime.PageResult;
+import dev.jta.runtime.csrf.CsrfRequest;
+import dev.jta.runtime.csrf.CsrfTokenStore;
+import dev.jta.runtime.csrf.CsrfTokenStoreFactory;
+import dev.jta.runtime.session.InMemorySessionStore;
+import dev.jta.runtime.session.JtaSession;
+import dev.jta.runtime.session.SessionStore;
 import gg.jte.TemplateEngine;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -21,6 +27,7 @@ import java.io.UncheckedIOException;
 import java.net.InetSocketAddress;
 import java.net.URLDecoder;
 import java.nio.charset.StandardCharsets;
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
@@ -71,9 +78,15 @@ public final class JtaHttpServer {
             JtaConfig jtaConfig = JtaConfig.loadFromClasspath(classLoader);
             TemplateEngine templateEngine = TemplateEngine.createPrecompiled(gg.jte.ContentType.Html);
 
+            CsrfTokenStore csrfTokenStore = config.csrfTokenStore() != null
+                    ? config.csrfTokenStore() : CsrfTokenStoreFactory.create(jtaConfig);
+            SessionStore sessionStore = config.sessionStore() != null
+                    ? config.sessionStore()
+                    : new InMemorySessionStore(Duration.ofMinutes(jtaConfig.getInt("session", "ttl_minutes", 30)));
+
             ComponentInvoker invoker = new ComponentInvoker(config.componentFactory());
-            JtaPageDispatcher pageDispatcher = new JtaPageDispatcher(registry, invoker, templateEngine, jtaConfig);
-            JtaActionDispatcher actionDispatcher = new JtaActionDispatcher(registry, invoker, templateEngine, config.validator());
+            JtaPageDispatcher pageDispatcher = new JtaPageDispatcher(registry, invoker, templateEngine, jtaConfig, csrfTokenStore);
+            JtaActionDispatcher actionDispatcher = new JtaActionDispatcher(registry, invoker, templateEngine, config.validator(), csrfTokenStore);
 
             List<PageRoute> pageRoutes = new ArrayList<>();
             for (ComponentMetadata page : registry.pages()) {
@@ -86,8 +99,8 @@ public final class JtaHttpServer {
 
             HttpServer server = HttpServer.create(new InetSocketAddress(port), 0);
             server.setExecutor(Executors.newVirtualThreadPerTaskExecutor());
-            server.createContext(ACTION_PREFIX, exchange -> handleAction(exchange, actionDispatcher, config));
-            server.createContext("/", exchange -> handlePage(exchange, pageRoutes, pageDispatcher, config));
+            server.createContext(ACTION_PREFIX, exchange -> handleAction(exchange, actionDispatcher, csrfTokenStore, sessionStore, jtaConfig, config));
+            server.createContext("/", exchange -> handlePage(exchange, pageRoutes, pageDispatcher, sessionStore, jtaConfig, config));
             return new JtaHttpServer(server);
         } catch (IOException e) {
             throw new UncheckedIOException("Falha ao criar o HttpServer na porta " + port, e);
@@ -110,7 +123,7 @@ public final class JtaHttpServer {
     }
 
     private static void handlePage(HttpExchange exchange, List<PageRoute> pageRoutes, JtaPageDispatcher dispatcher,
-                                    JtaStandaloneConfig config) throws IOException {
+                                    SessionStore sessionStore, JtaConfig jtaConfig, JtaStandaloneConfig config) throws IOException {
         if (!"GET".equals(exchange.getRequestMethod())) {
             sendResponse(exchange, 405, "");
             return;
@@ -125,10 +138,12 @@ public final class JtaHttpServer {
 
             Map<String, String[]> queryParams = parseQueryString(exchange.getRequestURI().getRawQuery());
             CurrentUser user = config.currentUserResolver().apply(exchange);
+            String cookieHeader = exchange.getRequestHeaders().getFirst("Cookie");
+            JtaSession session = resolveSession(exchange, cookieHeader, sessionStore, jtaConfig);
 
             PageResult result;
             try {
-                result = dispatcher.dispatch(route.metadata(), queryParams, pathVariables, user);
+                result = dispatcher.dispatch(route.metadata(), queryParams, pathVariables, user, session, cookieHeader);
             } catch (IllegalArgumentException e) {
                 LOG.warn("Requisicao JTA invalida para a pagina '{}'", route.metadata().selector(), e);
                 sendResponse(exchange, 400, "");
@@ -147,13 +162,20 @@ public final class JtaHttpServer {
                 return;
             }
             PageResult.Rendered rendered = (PageResult.Rendered) result;
+            if (rendered.csrfSetCookieHeader() != null) {
+                // add (nao set) - nao pisar o Set-Cookie de sessao ja
+                // adicionado por resolveSession, se houver (HttpExchange
+                // suporta multiplos headers com o mesmo nome).
+                exchange.getResponseHeaders().add("Set-Cookie", rendered.csrfSetCookieHeader());
+            }
             sendResponse(exchange, 200, rendered.html());
             return;
         }
         sendResponse(exchange, 404, "");
     }
 
-    private static void handleAction(HttpExchange exchange, JtaActionDispatcher dispatcher, JtaStandaloneConfig config)
+    private static void handleAction(HttpExchange exchange, JtaActionDispatcher dispatcher, CsrfTokenStore csrfTokenStore,
+                                      SessionStore sessionStore, JtaConfig jtaConfig, JtaStandaloneConfig config)
             throws IOException {
         if (!"POST".equals(exchange.getRequestMethod())) {
             sendResponse(exchange, 405, "");
@@ -178,10 +200,14 @@ public final class JtaHttpServer {
         }
 
         CurrentUser user = config.currentUserResolver().apply(exchange);
+        String cookieHeader = exchange.getRequestHeaders().getFirst("Cookie");
+        JtaSession session = resolveSession(exchange, cookieHeader, sessionStore, jtaConfig);
+        String csrfHeaderValue = exchange.getRequestHeaders().getFirst(csrfTokenStore.headerName());
+        CsrfRequest csrf = new CsrfRequest(cookieHeader, csrfHeaderValue);
 
         ActionResult result;
         try {
-            result = dispatcher.dispatch(selector, action, params, user);
+            result = dispatcher.dispatch(selector, action, params, user, session, csrf);
         } catch (IllegalArgumentException e) {
             LOG.warn("Requisicao JTA invalida na acao '{}' de '{}'",
                     sanitizeForLog(action), sanitizeForLog(selector), e);
@@ -211,6 +237,59 @@ public final class JtaHttpServer {
         }
         ActionResult.Rendered rendered = (ActionResult.Rendered) result;
         sendResponse(exchange, 200, rendered.html());
+    }
+
+    /**
+     * Resolve a {@link JtaSession} a partir da cookie {@code [session] cookie_name}
+     * (default {@code JTASESSIONID}) - cria uma nova sessao via
+     * {@link SessionStore#getOrCreate} se a cookie estiver ausente/expirada, e
+     * ja adiciona o {@code Set-Cookie} correspondente na resposta quando o id
+     * resolvido difere do que veio na requisicao (sessao nova).
+     *
+     * <p>{@code com.sun.net.httpserver.HttpExchange} nao tem nenhuma nocao de
+     * sessao por baixo - diferente do Spring (Servlet) e do Javalin (Jetty),
+     * que reusam a sessao do proprio container, aqui precisamos de
+     * {@link InMemorySessionStore} (jta-runtime) e parsing/escrita manual das
+     * cookies.
+     */
+    private static JtaSession resolveSession(HttpExchange exchange, String cookieHeader, SessionStore sessionStore,
+                                              JtaConfig jtaConfig) {
+        String cookieName = jtaConfig.getString("session", "cookie_name", "JTASESSIONID");
+        String requestedId = extractCookieValue(cookieHeader, cookieName);
+        JtaSession session = sessionStore.getOrCreate(requestedId);
+        if (requestedId == null || !requestedId.equals(session.id())) {
+            int ttlMinutes = jtaConfig.getInt("session", "ttl_minutes", 30);
+            boolean secure = jtaConfig.getBoolean("session", "secure", false);
+            String sameSite = jtaConfig.getString("session", "same_site", "Lax");
+            StringBuilder setCookie = new StringBuilder()
+                    .append(cookieName).append('=').append(session.id())
+                    .append("; Path=/; HttpOnly; SameSite=").append(sameSite)
+                    .append("; Max-Age=").append(ttlMinutes * 60L);
+            if (secure) {
+                setCookie.append("; Secure");
+            }
+            // add (nao set) - ver SECURITY.md/plano de sessao: nao pisar
+            // outros headers ja presentes na resposta.
+            exchange.getResponseHeaders().add("Set-Cookie", setCookie.toString());
+        }
+        return session;
+    }
+
+    private static String extractCookieValue(String cookieHeader, String name) {
+        if (cookieHeader == null || cookieHeader.isBlank()) {
+            return null;
+        }
+        for (String part : cookieHeader.split(";")) {
+            String pair = part.trim();
+            int eq = pair.indexOf('=');
+            if (eq < 0) {
+                continue;
+            }
+            if (pair.substring(0, eq).trim().equals(name)) {
+                return pair.substring(eq + 1).trim();
+            }
+        }
+        return null;
     }
 
     private static String firstValue(Map<String, String[]> params, String key) {

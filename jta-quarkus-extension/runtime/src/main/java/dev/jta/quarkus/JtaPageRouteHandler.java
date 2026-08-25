@@ -5,6 +5,7 @@ import dev.jta.core.ComponentRegistry;
 import dev.jta.runtime.CurrentUser;
 import dev.jta.runtime.JtaPageDispatcher;
 import dev.jta.runtime.PageResult;
+import dev.jta.runtime.session.JtaSession;
 import io.quarkus.arc.Arc;
 import io.quarkus.arc.ManagedContext;
 import io.vertx.core.Handler;
@@ -61,10 +62,12 @@ final class JtaPageRouteHandler implements Handler<RoutingContext> {
             Map<String, String[]> queryParams = toArrayMap(ctx.queryParams());
             Map<String, String> pathVariables = new HashMap<>(ctx.pathParams());
             CurrentUser user = QuarkusCurrentUser.current();
+            JtaSession session = ctx.session() != null ? new VertxJtaSession(ctx.session()) : JtaSession.none();
+            String cookieHeader = ctx.request().getHeader("Cookie");
 
             PageResult result;
             try {
-                result = dispatcher.dispatch(metadata, queryParams, pathVariables, user);
+                result = dispatcher.dispatch(metadata, queryParams, pathVariables, user, session, cookieHeader);
             } catch (IllegalArgumentException e) {
                 LOG.warn("Requisicao JTA invalida para a pagina '{}'", selector, e);
                 ctx.response().setStatusCode(400).end();
@@ -83,6 +86,9 @@ final class JtaPageRouteHandler implements Handler<RoutingContext> {
                 return;
             }
             PageResult.Rendered rendered = (PageResult.Rendered) result;
+            if (rendered.csrfSetCookieHeader() != null) {
+                ctx.response().headers().add("Set-Cookie", rendered.csrfSetCookieHeader());
+            }
             ctx.response().putHeader("Content-Type", "text/html; charset=utf-8").end(rendered.html());
         } finally {
             if (activatedHere) {

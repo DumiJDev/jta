@@ -379,6 +379,7 @@ echo "==> Testando PageShellRenderer + feature flag do TailwindCSS (jta-runtime,
 mkdir -p "$BUILD/pageshell/classes"
 javac -cp "$BUILD/core-classes" -d "$BUILD/pageshell/classes" \
       "$ROOT/jta-runtime/src/main/java/dev/jta/runtime/PageShellRenderer.java" \
+      "$ROOT/jta-runtime/src/main/java/dev/jta/runtime/csrf/CsrfToken.java" \
       "$ROOT/scripts/dev/jta/runtime/PageShellTest.java"
 java -cp "$BUILD/pageshell/classes:$BUILD/core-classes" dev.jta.runtime.PageShellTest \
       "$ROOT/scripts/pageshell-fixtures/cp-empty" "$ROOT/scripts/pageshell-fixtures/cp-styled"

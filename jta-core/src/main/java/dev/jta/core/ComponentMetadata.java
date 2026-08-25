@@ -41,6 +41,9 @@ import java.util.List;
  *                        "Seguro por padrao": um campo publico que o template
  *                        nunca menciona NAO e mais bindavel so por ser publico
  *                        (ver SECURITY.md, achado #5 - mass assignment).
+ * @param csrfExempt      true se o componente foi anotado com {@code @CsrfExempt} -
+ *                        {@code JtaActionDispatcher} pula a verificacao de
+ *                        CSRF para as acoes deste componente quando true.
  */
 public record ComponentMetadata(
         String fqn,
@@ -56,7 +59,8 @@ public record ComponentMetadata(
         boolean allowAnonymous,
         String ssePath,
         long sseIntervalMillis,
-        List<String> bindableFields
+        List<String> bindableFields,
+        boolean csrfExempt
 ) {
     public boolean isPage() {
         return routePath != null && !routePath.isBlank();

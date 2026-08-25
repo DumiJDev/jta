@@ -1,5 +1,6 @@
 package dev.jta.runtime;
 
+import dev.jta.runtime.session.JtaSession;
 import jakarta.validation.ConstraintViolation;
 import jakarta.validation.Validator;
 
@@ -285,5 +286,32 @@ public final class ComponentInvoker {
             }
         }
         // sem campo 'errors' declarado - ok, e opcional.
+    }
+
+    /**
+     * Popula um campo publico opcional chamado {@code session} (tipo
+     * {@link JtaSession}) com a sessao resolvida pelo adaptador para a
+     * requisicao atual - mesmo padrao exato de {@link #applyErrors}: se o
+     * componente nao declarar esse campo, e um no-op silencioso. O campo
+     * {@code session} nunca e bindavel via query params/form data (ver
+     * {@code populateFromParams}/{@code populateFromPathVariables}, que so
+     * populam campos em {@code bindableFields} - um template raramente
+     * referencia {@code session} via {{ }}, e mesmo que referenciasse,
+     * {@link #setField} nao sabe converter uma {@code String} crua para
+     * {@link JtaSession}, entao um valor de request nunca sobrescreveria a
+     * sessao real resolvida pelo runtime).
+     */
+    public void applySession(Object instance, JtaSession session) {
+        for (Field field : instance.getClass().getFields()) {
+            if (field.getName().equals("session") && JtaSession.class.isAssignableFrom(field.getType())) {
+                try {
+                    field.set(instance, session);
+                } catch (IllegalAccessException e) {
+                    throw new IllegalStateException("Nao foi possivel popular o campo 'session' em " + instance.getClass().getName(), e);
+                }
+                return;
+            }
+        }
+        // sem campo 'session' declarado - ok, e opcional.
     }
 }

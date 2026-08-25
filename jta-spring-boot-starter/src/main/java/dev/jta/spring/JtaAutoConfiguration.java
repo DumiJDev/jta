@@ -5,6 +5,8 @@ import dev.jta.core.JtaConfig;
 import dev.jta.runtime.ComponentInvoker;
 import dev.jta.runtime.JtaActionDispatcher;
 import dev.jta.runtime.JtaPageDispatcher;
+import dev.jta.runtime.csrf.CsrfTokenStore;
+import dev.jta.runtime.csrf.CsrfTokenStoreFactory;
 import gg.jte.ContentType;
 import gg.jte.TemplateEngine;
 import org.springframework.beans.factory.ObjectProvider;
@@ -66,16 +68,23 @@ public class JtaAutoConfiguration {
 
     @Bean
     @ConditionalOnMissingBean
+    public CsrfTokenStore jtaCsrfTokenStore(JtaConfig config) {
+        return CsrfTokenStoreFactory.create(config);
+    }
+
+    @Bean
+    @ConditionalOnMissingBean
     public JtaActionDispatcher jtaActionDispatcher(ComponentRegistry registry, ComponentInvoker invoker, TemplateEngine templateEngine,
-                                                     ObjectProvider<jakarta.validation.Validator> validatorProvider) {
-        return new JtaActionDispatcher(registry, invoker, templateEngine, validatorProvider.getIfAvailable());
+                                                     ObjectProvider<jakarta.validation.Validator> validatorProvider,
+                                                     CsrfTokenStore csrfTokenStore) {
+        return new JtaActionDispatcher(registry, invoker, templateEngine, validatorProvider.getIfAvailable(), csrfTokenStore);
     }
 
     @Bean
     @ConditionalOnMissingBean
     public JtaPageDispatcher jtaPageDispatcher(ComponentRegistry registry, ComponentInvoker invoker, TemplateEngine templateEngine,
-                                                 JtaConfig config) {
-        return new JtaPageDispatcher(registry, invoker, templateEngine, config);
+                                                 JtaConfig config, CsrfTokenStore csrfTokenStore) {
+        return new JtaPageDispatcher(registry, invoker, templateEngine, config, csrfTokenStore);
     }
 
     // JtaActionController e JtaRouteRegistrar sao @RestController/beans
@@ -86,8 +95,8 @@ public class JtaAutoConfiguration {
     // sendo importado explicitamente aqui como beans regulares.
     @Bean
     @ConditionalOnMissingBean
-    JtaActionController jtaActionController(JtaActionDispatcher dispatcher) {
-        return new JtaActionController(dispatcher);
+    JtaActionController jtaActionController(JtaActionDispatcher dispatcher, CsrfTokenStore csrfTokenStore) {
+        return new JtaActionController(dispatcher, csrfTokenStore);
     }
 
     @Bean

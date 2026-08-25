@@ -13,6 +13,10 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.util.LinkedMultiValueMap;
 import org.springframework.util.MultiValueMap;
 
+import java.util.List;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
+
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
@@ -33,10 +37,33 @@ class AlunoIntegrationTest {
         return "http://localhost:" + port;
     }
 
+    private static final Pattern CSRF_TOKEN_PATTERN =
+            Pattern.compile("hx-headers='\\{\"X-JTA-CSRF-Token\":\"([^\"]+)\"}'");
+
+    /**
+     * Fluxo real de CSRF nativo (ver SECURITY.md, achado #6): GET de uma
+     * pagina emite a cookie assinada e embute o token no {@code hx-headers}
+     * do {@code <body>} - extraidos aqui para toda acao POST deste teste
+     * poder provar que veio do mesmo cliente que visitou a pagina.
+     */
     private ResponseEntity<String> postAction(String fqn, String action, MultiValueMap<String, String> form) {
+        ResponseEntity<String> pagina = rest.getForEntity(baseUrl() + "/alunos", String.class);
+        List<String> setCookies = pagina.getHeaders().get(HttpHeaders.SET_COOKIE);
+        String cookie = (setCookies == null ? List.<String>of() : setCookies).stream()
+                .filter(v -> v.startsWith("jta_csrf="))
+                .findFirst()
+                .orElseThrow(() -> new IllegalStateException("GET /alunos nao emitiu Set-Cookie de CSRF: " + setCookies))
+                .split(";", 2)[0];
+        Matcher matcher = CSRF_TOKEN_PATTERN.matcher(pagina.getBody());
+        if (!matcher.find()) {
+            throw new IllegalStateException("token CSRF nao encontrado no hx-headers: " + pagina.getBody());
+        }
+
         String selector = SelectorDerivation.derive(fqn);
         HttpHeaders headers = new HttpHeaders();
         headers.setContentType(MediaType.APPLICATION_FORM_URLENCODED);
+        headers.add(HttpHeaders.COOKIE, cookie);
+        headers.add("X-JTA-CSRF-Token", matcher.group(1));
         HttpEntity<MultiValueMap<String, String>> request = new HttpEntity<>(form, headers);
         return rest.exchange(baseUrl() + "/__jta/action/" + selector + "?action=" + action,
                 HttpMethod.POST, request, String.class);

@@ -3,6 +3,9 @@ package dev.jta.quarkus;
 import dev.jta.runtime.ActionResult;
 import dev.jta.runtime.CurrentUser;
 import dev.jta.runtime.JtaActionDispatcher;
+import dev.jta.runtime.csrf.CsrfRequest;
+import dev.jta.runtime.csrf.CsrfTokenStore;
+import dev.jta.runtime.session.JtaSession;
 import io.quarkus.arc.Arc;
 import io.quarkus.arc.ManagedContext;
 import io.vertx.core.Handler;
@@ -44,16 +47,21 @@ final class JtaActionRouteHandler implements Handler<RoutingContext> {
             }
 
             JtaActionDispatcher dispatcher = Arc.container().instance(JtaActionDispatcher.class).get();
+            CsrfTokenStore csrfTokenStore = Arc.container().instance(CsrfTokenStore.class).get();
 
             Map<String, String[]> params = new HashMap<>(toArrayMap(ctx.queryParams()));
             params.remove("action");
             params.putAll(toArrayMap(ctx.request().formAttributes()));
 
             CurrentUser user = QuarkusCurrentUser.current();
+            JtaSession session = ctx.session() != null ? new VertxJtaSession(ctx.session()) : JtaSession.none();
+            String cookieHeader = ctx.request().getHeader("Cookie");
+            String csrfHeaderValue = ctx.request().getHeader(csrfTokenStore.headerName());
+            CsrfRequest csrf = new CsrfRequest(cookieHeader, csrfHeaderValue);
 
             ActionResult result;
             try {
-                result = dispatcher.dispatch(selector, action, params, user);
+                result = dispatcher.dispatch(selector, action, params, user, session, csrf);
             } catch (IllegalArgumentException e) {
                 LOG.warn("Requisicao JTA invalida na acao '{}' de '{}'",
                         sanitizeForLog(action), sanitizeForLog(selector), e);

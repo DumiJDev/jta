@@ -5,6 +5,8 @@ import dev.jta.core.JtaConfig;
 import dev.jta.runtime.ComponentInvoker;
 import dev.jta.runtime.JtaActionDispatcher;
 import dev.jta.runtime.JtaPageDispatcher;
+import dev.jta.runtime.csrf.CsrfTokenStore;
+import dev.jta.runtime.csrf.CsrfTokenStoreFactory;
 import gg.jte.ContentType;
 import gg.jte.TemplateEngine;
 import jakarta.enterprise.context.ApplicationScoped;
@@ -55,19 +57,26 @@ class JtaCdiProducers {
 
     @Produces
     @ApplicationScoped
+    CsrfTokenStore csrfTokenStore(JtaConfig config) {
+        return CsrfTokenStoreFactory.create(config);
+    }
+
+    @Produces
+    @ApplicationScoped
     JtaPageDispatcher jtaPageDispatcher(ComponentRegistry registry, ComponentInvoker invoker,
-                                         TemplateEngine templateEngine, JtaConfig config) {
-        return new JtaPageDispatcher(registry, invoker, templateEngine, config);
+                                         TemplateEngine templateEngine, JtaConfig config, CsrfTokenStore csrfTokenStore) {
+        return new JtaPageDispatcher(registry, invoker, templateEngine, config, csrfTokenStore);
     }
 
     @Produces
     @ApplicationScoped
     JtaActionDispatcher jtaActionDispatcher(ComponentRegistry registry, ComponentInvoker invoker,
-                                             TemplateEngine templateEngine, Instance<Validator> validator) {
+                                             TemplateEngine templateEngine, Instance<Validator> validator,
+                                             CsrfTokenStore csrfTokenStore) {
         // Validator so existe se o consumidor tiver quarkus-hibernate-validator
         // no classpath - Instance<> deixa isso opcional, igual ao
         // ObjectProvider<Validator> do starter Spring.
         return new JtaActionDispatcher(registry, invoker, templateEngine,
-                validator.isResolvable() ? validator.get() : null);
+                validator.isResolvable() ? validator.get() : null, csrfTokenStore);
     }
 }

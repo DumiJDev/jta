@@ -9,6 +9,9 @@ import dev.jta.runtime.CurrentUser;
 import dev.jta.runtime.JtaActionDispatcher;
 import dev.jta.runtime.JtaPageDispatcher;
 import dev.jta.runtime.PageResult;
+import dev.jta.runtime.csrf.CsrfRequest;
+import dev.jta.runtime.csrf.CsrfTokenStore;
+import dev.jta.runtime.csrf.CsrfTokenStoreFactory;
 import gg.jte.TemplateEngine;
 import io.javalin.Javalin;
 import io.javalin.http.Context;
@@ -70,14 +73,17 @@ public final class JtaJavalin {
         JtaConfig jtaConfig = JtaConfig.loadFromClasspath(classLoader);
         TemplateEngine templateEngine = TemplateEngine.createPrecompiled(gg.jte.ContentType.Html);
 
+        CsrfTokenStore csrfTokenStore = config.csrfTokenStore() != null
+                ? config.csrfTokenStore() : CsrfTokenStoreFactory.create(jtaConfig);
+
         ComponentInvoker invoker = new ComponentInvoker(config.componentFactory());
-        JtaPageDispatcher pageDispatcher = new JtaPageDispatcher(registry, invoker, templateEngine, jtaConfig);
-        JtaActionDispatcher actionDispatcher = new JtaActionDispatcher(registry, invoker, templateEngine, config.validator());
+        JtaPageDispatcher pageDispatcher = new JtaPageDispatcher(registry, invoker, templateEngine, jtaConfig, csrfTokenStore);
+        JtaActionDispatcher actionDispatcher = new JtaActionDispatcher(registry, invoker, templateEngine, config.validator(), csrfTokenStore);
 
         for (ComponentMetadata page : registry.pages()) {
             app.unsafe.routes.get(page.routePath(), ctx -> handlePage(ctx, page, pageDispatcher, config));
         }
-        app.unsafe.routes.post("/__jta/action/{selector}", ctx -> handleAction(ctx, actionDispatcher, config));
+        app.unsafe.routes.post("/__jta/action/{selector}", ctx -> handleAction(ctx, actionDispatcher, csrfTokenStore, config));
     }
 
     /** Atalho de conveniencia com a configuracao default (sem DI, sem autenticacao). */
@@ -90,10 +96,12 @@ public final class JtaJavalin {
         Map<String, String[]> queryParams = toArrayMap(ctx.queryParamMap());
         Map<String, String> pathVariables = ctx.pathParamMap();
         CurrentUser user = config.currentUserResolver().apply(ctx);
+        var session = new JavalinJtaSession(ctx.req().getSession(true));
+        String cookieHeader = ctx.req().getHeader("Cookie");
 
         PageResult result;
         try {
-            result = dispatcher.dispatch(metadata, queryParams, pathVariables, user);
+            result = dispatcher.dispatch(metadata, queryParams, pathVariables, user, session, cookieHeader);
         } catch (IllegalArgumentException e) {
             LOG.warn("Requisicao JTA invalida para a pagina '{}'", metadata.selector(), e);
             ctx.status(400);
@@ -113,10 +121,14 @@ public final class JtaJavalin {
             return;
         }
         PageResult.Rendered rendered = (PageResult.Rendered) result;
+        if (rendered.csrfSetCookieHeader() != null) {
+            ctx.addHeader("Set-Cookie", rendered.csrfSetCookieHeader());
+        }
         ctx.html(rendered.html());
     }
 
-    private static void handleAction(Context ctx, JtaActionDispatcher dispatcher, JtaJavalinConfig config) {
+    private static void handleAction(Context ctx, JtaActionDispatcher dispatcher, CsrfTokenStore csrfTokenStore,
+                                      JtaJavalinConfig config) {
         String selector = ctx.pathParam("selector");
         String action = ctx.queryParam("action");
         if (action == null || action.isBlank()) {
@@ -127,10 +139,14 @@ public final class JtaJavalin {
         Map<String, String[]> params = new HashMap<>(toArrayMap(ctx.queryParamMap()));
         params.putAll(toArrayMap(ctx.formParamMap()));
         CurrentUser user = config.currentUserResolver().apply(ctx);
+        var session = new JavalinJtaSession(ctx.req().getSession(true));
+        String cookieHeader = ctx.req().getHeader("Cookie");
+        String csrfHeaderValue = ctx.req().getHeader(csrfTokenStore.headerName());
+        CsrfRequest csrf = new CsrfRequest(cookieHeader, csrfHeaderValue);
 
         ActionResult result;
         try {
-            result = dispatcher.dispatch(selector, action, params, user);
+            result = dispatcher.dispatch(selector, action, params, user, session, csrf);
         } catch (IllegalArgumentException e) {
             LOG.warn("Requisicao JTA invalida na acao '{}' de '{}'",
                     sanitizeForLog(action), sanitizeForLog(selector), e);
