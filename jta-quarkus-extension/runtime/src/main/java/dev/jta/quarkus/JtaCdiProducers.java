@@ -5,7 +5,7 @@ import dev.jta.core.JtaConfig;
 import dev.jta.runtime.ComponentInvoker;
 import dev.jta.runtime.JtaActionDispatcher;
 import dev.jta.runtime.JtaPageDispatcher;
-import gg.jte.ContentType;
+import dev.jta.runtime.JtaTemplateEngineFactory;
 import gg.jte.TemplateEngine;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.enterprise.inject.Instance;
@@ -21,10 +21,13 @@ import jakarta.validation.Validator;
  * runtime desta extensao nao faz parte do bean archive index da app por
  * default.
  *
- * <p><b>Importante:</b> {@link TemplateEngine#createPrecompiled} carrega
- * classes {@code .jte} ja compiladas via classloader - o consumidor
- * precisa configurar o {@code jte-maven-plugin} (goal {@code precompile})
- * no seu proprio build, exatamente como no starter Spring.
+ * <p><b>Importante:</b> {@link JtaTemplateEngineFactory} usa
+ * {@link TemplateEngine#createPrecompiled} por padrao (carrega classes
+ * {@code .jte} ja compiladas via classloader) - o consumidor precisa
+ * configurar o {@code jte-maven-plugin} (goal {@code precompile}) no seu
+ * proprio build, exatamente como no starter Spring. So troca para o
+ * dev-loop (recompilacao sob demanda) se explicitamente ligado - ver o
+ * javadoc daquela classe.
  */
 @Singleton
 class JtaCdiProducers {
@@ -43,8 +46,8 @@ class JtaCdiProducers {
 
     @Produces
     @ApplicationScoped
-    TemplateEngine templateEngine() {
-        return TemplateEngine.createPrecompiled(ContentType.Html);
+    TemplateEngine templateEngine(JtaConfig config) {
+        return JtaTemplateEngineFactory.create(config);
     }
 
     @Produces

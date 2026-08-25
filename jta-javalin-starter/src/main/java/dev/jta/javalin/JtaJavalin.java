@@ -8,6 +8,7 @@ import dev.jta.runtime.ComponentInvoker;
 import dev.jta.runtime.CurrentUser;
 import dev.jta.runtime.JtaActionDispatcher;
 import dev.jta.runtime.JtaPageDispatcher;
+import dev.jta.runtime.JtaTemplateEngineFactory;
 import dev.jta.runtime.PageResult;
 import gg.jte.TemplateEngine;
 import io.javalin.Javalin;
@@ -61,14 +62,16 @@ public final class JtaJavalin {
      * <p><b>Importante:</b> tal como no starter Spring, o consumidor
      * precisa configurar o {@code jte-maven-plugin} (goal {@code precompile})
      * no seu proprio build apontado para o output do {@code jta-processor} -
-     * {@link TemplateEngine#createPrecompiled} carrega essas classes ja
-     * compiladas via classloader, nao recompila {@code .jte} em runtime.
+     * {@link JtaTemplateEngineFactory} usa {@link TemplateEngine#createPrecompiled}
+     * por padrao (carrega essas classes ja compiladas via classloader), e so
+     * troca para o dev-loop (recompilacao sob demanda) se explicitamente
+     * ligado - ver o javadoc daquela classe.
      */
     public static void register(Javalin app, JtaJavalinConfig config) {
         ClassLoader classLoader = Thread.currentThread().getContextClassLoader();
         ComponentRegistry registry = ComponentRegistry.loadFromClasspath(classLoader);
         JtaConfig jtaConfig = JtaConfig.loadFromClasspath(classLoader);
-        TemplateEngine templateEngine = TemplateEngine.createPrecompiled(gg.jte.ContentType.Html);
+        TemplateEngine templateEngine = JtaTemplateEngineFactory.create(jtaConfig, classLoader);
 
         ComponentInvoker invoker = new ComponentInvoker(config.componentFactory());
         JtaPageDispatcher pageDispatcher = new JtaPageDispatcher(registry, invoker, templateEngine, jtaConfig);

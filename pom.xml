@@ -4,7 +4,7 @@
          xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
     <modelVersion>4.0.0</modelVersion>
 
-    <groupId>dev.jta</groupId>
+    <groupId>io.github.dumijdev</groupId>
     <artifactId>jta-parent</artifactId>
     <version>0.1.0-SNAPSHOT</version>
     <packaging>pom</packaging>
@@ -14,6 +14,58 @@
         Framework fullstack server-side Java: componentes tipados sobre JTE + HTMX,
         experiencia de desenvolvimento estilo Angular sem TypeScript nem cliente JS.
     </description>
+    <url>https://github.com/DumiJDev/jta</url>
+
+    <!--
+        groupId io.github.dumijdev (nao dev.jta): o Central Publishing Portal
+        exige prova de posse do namespace do groupId, e dev.jta exigiria
+        provar posse do dominio jta.dev - io.github.<usuario> e verificado
+        automaticamente contra a conta GitHub do publisher, sem esse passo.
+        Decisao de produto para o release 0.1.0 (ver plano mestre da fase 5).
+        Os pacotes Java continuam dev.jta.* de proposito - groupId Maven e
+        namespace de pacote Java sao coisas independentes, e renomear todo
+        pacote so por causa disso seria um breaking change desnecessario
+        nesta fase (config de publicacao, nao reescrita de codigo).
+    -->
+
+    <licenses>
+        <license>
+            <name>MIT License</name>
+            <url>https://opensource.org/licenses/MIT</url>
+            <distribution>repo</distribution>
+        </license>
+    </licenses>
+
+    <scm>
+        <connection>scm:git:https://github.com/DumiJDev/jta.git</connection>
+        <developerConnection>scm:git:https://github.com/DumiJDev/jta.git</developerConnection>
+        <url>https://github.com/DumiJDev/jta</url>
+        <tag>HEAD</tag>
+    </scm>
+
+    <developers>
+        <developer>
+            <name>Dumilde Fernando</name>
+            <email>dumilde.fernando@selenium.ao</email>
+            <url>https://github.com/DumiJDev</url>
+        </developer>
+    </developers>
+
+    <!--
+        Publicacao no Maven Central via Central Publishing Portal
+        (central.sonatype.com) - o antigo OSSRH (s01.oss.sonatype.org) foi
+        desativado em 30/06/2025, entao central-publishing-maven-plugin
+        (nao mais nexus-staging-maven-plugin) e a via atual. Apenas
+        scaffolding de config aqui - ver perfil "release" no build abaixo;
+        nenhum deploy real foi executado, nenhuma credencial/chave GPG foi
+        manuseada.
+    -->
+    <distributionManagement>
+        <snapshotRepository>
+            <id>central</id>
+            <url>https://central.sonatype.com/repository/maven-snapshots/</url>
+        </snapshotRepository>
+    </distributionManagement>
 
     <modules>
         <module>jta-core</module>
@@ -25,6 +77,7 @@
         <module>jta-quarkus-extension</module>
         <module>jta-cli</module>
         <module>jta-demo</module>
+        <module>jta-test</module>
     </modules>
 
     <properties>
@@ -142,4 +195,107 @@
             </plugins>
         </pluginManagement>
     </build>
+
+    <!--
+        Perfil "release": empacota javadoc+sources e assina com GPG,
+        prontos para deploy no Central Publishing Portal. Isolado num
+        perfil nao-ativo-por-default (em vez de <build><plugins> direto)
+        de proposito - `mvn compile`/`mvn test`/`mvn install` do dia a dia
+        NAO devem exigir uma chave GPG configurada nem pagar o custo de
+        gerar javadoc de todo modulo a cada build. Ativa com
+        `mvn -Prelease deploy` (nao executado neste corte - config-only,
+        ver nota da tarefa: nenhuma chave GPG/credencial foi manuseada
+        neste ambiente).
+    -->
+    <profiles>
+        <profile>
+            <id>release</id>
+            <build>
+                <plugins>
+                    <plugin>
+                        <groupId>org.apache.maven.plugins</groupId>
+                        <artifactId>maven-source-plugin</artifactId>
+                        <version>3.3.1</version>
+                        <executions>
+                            <execution>
+                                <id>attach-sources</id>
+                                <goals>
+                                    <goal>jar-no-fork</goal>
+                                </goals>
+                            </execution>
+                        </executions>
+                    </plugin>
+                    <plugin>
+                        <groupId>org.apache.maven.plugins</groupId>
+                        <artifactId>maven-javadoc-plugin</artifactId>
+                        <version>3.10.1</version>
+                        <configuration>
+                            <!--
+                                Os comentarios Javadoc deste projeto sao
+                                escritos em portugues e usam pontuacao/HTML
+                                informal (ver estilo em todo o codebase) -
+                                o linter estrito do javadoc do JDK 21 rejeita
+                                isso por padrao (tags cruzadas, HTML nao
+                                fechado, etc). doclint desligado aqui para o
+                                jar de javadoc gerar sem exigir reescrever
+                                toda a documentacao existente so por causa
+                                do publish - decisao de escopo, nao descuido.
+                            -->
+                            <doclint>none</doclint>
+                            <quiet>true</quiet>
+                            <failOnError>false</failOnError>
+                        </configuration>
+                        <executions>
+                            <execution>
+                                <id>attach-javadocs</id>
+                                <goals>
+                                    <goal>jar</goal>
+                                </goals>
+                            </execution>
+                        </executions>
+                    </plugin>
+                    <plugin>
+                        <groupId>org.apache.maven.plugins</groupId>
+                        <artifactId>maven-gpg-plugin</artifactId>
+                        <version>3.2.7</version>
+                        <executions>
+                            <execution>
+                                <id>sign-artifacts</id>
+                                <phase>verify</phase>
+                                <goals>
+                                    <goal>sign</goal>
+                                </goals>
+                            </execution>
+                        </executions>
+                    </plugin>
+                    <plugin>
+                        <!--
+                            central-publishing-maven-plugin, nao
+                            nexus-staging-maven-plugin/o antigo
+                            org.sonatype.plugins:nexus-staging-maven-plugin -
+                            este ultimo falava com OSSRH (s01.oss.sonatype.org),
+                            desativado em 30/06/2025. Todo projeto novo (e
+                            todo projeto migrado) publica via este plugin
+                            contra o Central Publishing Portal desde entao.
+                        -->
+                        <groupId>org.sonatype.central</groupId>
+                        <artifactId>central-publishing-maven-plugin</artifactId>
+                        <version>0.7.0</version>
+                        <extensions>true</extensions>
+                        <configuration>
+                            <publishingServerId>central</publishingServerId>
+                            <!--
+                                autoPublish=false de proposito: sobe para
+                                staging no Central Publishing Portal mas exige
+                                confirmacao manual antes de ir para o Central
+                                de verdade - rede de seguranca para o primeiro
+                                release real, nao removida neste corte.
+                            -->
+                            <autoPublish>false</autoPublish>
+                        </configuration>
+                    </plugin>
+                </plugins>
+            </build>
+        </profile>
+    </profiles>
 </project>
