@@ -36,13 +36,12 @@ import java.util.List;
              + "hx-select=\"#alunos-resultado\" hx-target=\"#alunos-resultado\" hx-swap=\"outerHTML\"/>"
              + "</div>"
              + "<div id=\"alunos-resultado\">"
-             + "<table class=\"jta-table\">"
-             + "<tr><th>Nome</th><th>Email</th><th></th></tr>"
-             + "@for(var a : self.alunos())"
-             + "<tr><td><a href=\"/alunos/${a.id()}\">${a.nome()}</a></td><td>${a.email()}</td>"
-             + "<td><a href=\"/alunos/${a.id()}/editar\">editar</a></td></tr>"
+             + "@for(var aluno : self.alunos())"
+             + "<div class=\"jta-card\">"
+             + "<aluno-linha [id]=\"aluno.id\" [nome]=\"aluno.nome\" [email]=\"aluno.email\"/>"
+             + "<button (click)=\"remover(aluno.id)\">Remover</button>"
+             + "</div>"
              + "@endfor"
-             + "</table>"
              + "</div>"
              + "</main>"
 )
@@ -60,7 +59,41 @@ public class AlunoLista {
         return service.listar(q).stream().map(AlunoView::of).toList();
     }
 
-    public record AlunoView(String id, String nome, String email) {
+    /**
+     * Prova de ponta a ponta de "argumentos em acoes" com raiz de
+     * variavel de loop: {@code (click)="remover(aluno.id)"} dentro de
+     * {@code @for(var aluno : self.alunos())} - o {@code id} do aluno
+     * clicado chega aqui via {@code __jtaArg0}, resolvido por posicao
+     * (nao por nome de parametro).
+     */
+    public void remover(String id) {
+        service.excluir(id);
+    }
+
+    /**
+     * Classe (nao record) DE PROPOSITO: a gramatica de raiz de variavel de
+     * loop (compartilhada entre {@code [input]="aluno.campo"} e
+     * {@code (click)="acao(aluno.campo)"}) so passa o acesso encadeado
+     * verbatim para o Java gerado, sem validar alem da raiz - suporta
+     * {@code aluno.campo} (campo publico) mas NAO suporta
+     * {@code aluno.campo()} como argumento de acao (o parser de
+     * argumentos e deliberadamente MVP: nao aceita parenteses aninhados
+     * dentro de um argumento - ver {@code TemplateTransformer#EVENT_BINDING}).
+     * Um record exporia {@code id()}/{@code nome()}/{@code email()}
+     * (metodos, nao campos), que funcionaria em {@code [input]="..."} mas
+     * quebraria silenciosamente em {@code (click)="remover(aluno.id())"}.
+     */
+    public static final class AlunoView {
+        public final String id;
+        public final String nome;
+        public final String email;
+
+        AlunoView(String id, String nome, String email) {
+            this.id = id;
+            this.nome = nome;
+            this.email = email;
+        }
+
         static AlunoView of(Aluno a) {
             return new AlunoView(a.getId(), a.getNome(), a.getEmail());
         }

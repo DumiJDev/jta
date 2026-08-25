@@ -1,6 +1,7 @@
 package dev.jta.core;
 
 import java.util.List;
+import java.util.Map;
 
 /**
  * Metadados de um componente, emitidos pelo {@code JtaAnnotationProcessor}
@@ -41,6 +42,25 @@ import java.util.List;
  *                        "Seguro por padrao": um campo publico que o template
  *                        nunca menciona NAO e mais bindavel so por ser publico
  *                        (ver SECURITY.md, achado #5 - mass assignment).
+ * @param actionParams    nome da acao -> tipos simples ordenados dos seus
+ *                        parametros (ex: {@code ["String"]} para
+ *                        {@code remover(String id)}). Ausente/vazio para uma
+ *                        acao = aridade 0, compativel com componentes ja
+ *                        compilados antes desta feature (sempre tinham
+ *                        aridade 0). Consumido pelas duas camadas de defesa
+ *                        contra invocacao de acao com aridade incompativel
+ *                        (ver {@code JtaActionDispatcher}/{@code ComponentInvoker}).
+ * @param inputs          nomes dos campos publicos anotados {@code @Input}
+ *                        deste componente - informativo/tooling; a validacao
+ *                        real de property binding pai->filho acontece em
+ *                        compile-time no modulo do PAI (que enxerga o filho
+ *                        via {@link javax.lang.model.element.TypeElement},
+ *                        nao precisa reler isto de {@code components.json}).
+ * @param children        FQNs (deduplicados) dos componentes aninhados
+ *                        diretamente no template deste componente - base
+ *                        para a deteccao de ciclo de aninhamento (DFS sobre
+ *                        a aresta fqn -> children, rodada uma vez ao final
+ *                        do processing do modulo).
  * @param csrfExempt      true se o componente foi anotado com {@code @CsrfExempt} -
  *                        {@code JtaActionDispatcher} pula a verificacao de
  *                        CSRF para as acoes deste componente quando true.
@@ -60,6 +80,9 @@ public record ComponentMetadata(
         String ssePath,
         long sseIntervalMillis,
         List<String> bindableFields,
+        Map<String, List<String>> actionParams,
+        List<String> inputs,
+        List<String> children,
         boolean csrfExempt
 ) {
     public boolean isPage() {
@@ -80,5 +103,15 @@ public record ComponentMetadata(
 
     public boolean hasSse() {
         return ssePath != null && !ssePath.isBlank();
+    }
+
+    /**
+     * Aridade declarada de uma acao - 0 se a acao nao aparecer em
+     * {@link #actionParams()} (compatibilidade com metadata antiga, que
+     * sempre tratava acoes como aridade 0).
+     */
+    public int actionArity(String action) {
+        List<String> params = actionParams == null ? null : actionParams.get(action);
+        return params == null ? 0 : params.size();
     }
 }

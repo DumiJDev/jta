@@ -39,4 +39,8 @@ public class AlunoService {
             repository.save(aluno);
         });
     }
+
+    public void excluir(String id) {
+        repository.deleteById(id);
+    }
 }

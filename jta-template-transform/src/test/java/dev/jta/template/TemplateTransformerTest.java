@@ -2,6 +2,8 @@ package dev.jta.template;
 
 import org.junit.jupiter.api.Test;
 
+import java.util.List;
+import java.util.Map;
 import java.util.Set;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -9,162 +11,251 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * Cobertura direta de {@link TemplateTransformer}, antes so validada
- * indiretamente via compilacao real de fixtures em {@code scripts/smoke-test.sh}
- * (que exercita o processor inteiro, nao so a transformacao). Escrita
- * durante a extracao desta classe para {@code jta-template-transform}, para
- * provar que a extracao preservou o comportamento exato.
+ * Testes unitarios para {@link TemplateTransformer}, cobrindo o
+ * comportamento pre-existente (interpolacao, i18n, escopo de CSS) e a
+ * nova sintaxe de composicao de componentes + argumentos em acoes.
  */
 class TemplateTransformerTest {
 
+    private static final Set<String> NO_FIELDS = Set.of();
     private static final Set<String> NO_METHODS = Set.of();
+    private static final Map<String, List<String>> NO_ACTIONS = Map.of();
     private static final Set<String> NO_NULLABLE = Set.of();
     private static final Set<String> NO_MESSAGES = Set.of();
+    private static final Map<String, TemplateTransformer.ChildRef> NO_CHILDREN = Map.of();
+
+    // --- comportamento pre-existente, garantindo que a reescrita nao regrediu ---
 
     @Test
-    void interpolaCampoConhecidoParaExpressaoJte() {
-        var result = TemplateTransformer.transform(
-                "<p>{{ nome }}</p>", "meu-comp",
-                Set.of("nome"), NO_METHODS, Set.of(), NO_NULLABLE, NO_MESSAGES);
+    void interpolacaoSimplesDeCampoFuncionaComoAntes() {
+        TemplateTransformer.Result result = TemplateTransformer.transform(
+                "<div>{{ nome }}</div>", "meu-sel", Set.of("nome"), NO_METHODS, NO_ACTIONS, NO_NULLABLE, NO_MESSAGES, NO_CHILDREN);
 
-        assertFalse(result.hasErrors());
+        assertFalse(result.hasErrors(), errorsOf(result));
         assertTrue(result.generatedJte().contains("${self.nome}"));
-        assertEquals(java.util.List.of("nome"), result.referencedFields());
+        assertEquals(List.of("nome"), result.referencedFields());
     }
 
     @Test
-    void campoDesconhecidoEErroComSugestao() {
-        var result = TemplateTransformer.transform(
-                "<p>{{ nome }}</p>", "meu-comp",
-                Set.of("nomee"), NO_METHODS, Set.of(), NO_NULLABLE, NO_MESSAGES);
+    void eventoSemArgumentosContinuaFuncionando() {
+        TemplateTransformer.Result result = TemplateTransformer.transform(
+                "<button (click)=\"incrementar()\">+</button>", "meu-sel", NO_FIELDS, NO_METHODS,
+                Map.of("incrementar", List.of()), NO_NULLABLE, NO_MESSAGES, NO_CHILDREN);
 
-        assertTrue(result.hasErrors());
-        TemplateTransformer.ValidationError erro = result.errors().get(0);
-        assertEquals("field", erro.kind());
-        assertTrue(erro.message().contains("voce quis dizer 'nomee'?"),
-                "erro de campo desconhecido deveria sugerir o campo real por proximidade: " + erro.message());
+        assertFalse(result.hasErrors(), errorsOf(result));
+        assertEquals(List.of("incrementar"), result.boundActions());
+        assertTrue(result.generatedJte().contains("hx-post=\"/__jta/action/meu-sel?action=incrementar\""));
     }
 
-    @Test
-    void metodoDeTemplateUsaConjuntoDeMetodosNaoDeCampos() {
-        var result = TemplateTransformer.transform(
-                "<p>{{ saudacao() }}</p>", "meu-comp",
-                Set.of(), Set.of("saudacao"), Set.of(), NO_NULLABLE, NO_MESSAGES);
-
-        assertFalse(result.hasErrors());
-        assertTrue(result.generatedJte().contains("${self.saudacao()}"));
-        assertTrue(result.referencedFields().isEmpty(), "metodo de template nao e um campo bindavel");
-    }
+    // --- @Use / composicao de componentes ---
 
     @Test
-    void eventBindingParaAcaoConhecidaGeraAtributosHtmx() {
-        var result = TemplateTransformer.transform(
-                "<button (click)=\"incrementar()\">+</button>", "contador",
-                NO_METHODS, NO_METHODS, Set.of("incrementar"), NO_NULLABLE, NO_MESSAGES);
+    void tagDeFilhoResolvidaGeraChamadaDeTemplateNativa() {
+        var child = new TemplateTransformer.ChildRef("dev.jta.demo.Card", "meu-card", Set.of("titulo"), false);
+        TemplateTransformer.Result result = TemplateTransformer.transform(
+                "<div><meu-card [titulo]=\"tituloDaLista\"/></div>", "pai-sel", Set.of("tituloDaLista"), NO_METHODS,
+                NO_ACTIONS, NO_NULLABLE, NO_MESSAGES, Map.of("meu-card", child));
 
-        assertFalse(result.hasErrors());
-        assertEquals(java.util.List.of("incrementar"), result.boundActions());
+        assertFalse(result.hasErrors(), errorsOf(result));
+        assertEquals(List.of("dev.jta.demo.Card"), result.children());
         String jte = result.generatedJte();
-        assertTrue(jte.contains("hx-post=\"/__jta/action/contador?action=incrementar\""));
-        assertTrue(jte.contains("hx-target=\"closest [data-jta-component]\""));
-        assertTrue(jte.contains("hx-swap=\"outerHTML\""));
+        assertTrue(jte.contains("@template.dev.jta.demo.Card("));
+        assertTrue(jte.contains("__jtaInvoker.instantiateChild(dev.jta.demo.Card.class"));
+        assertTrue(jte.contains("\"titulo\", (Object)(self.tituloDaLista)"));
+        assertTrue(jte.contains(", __jtaInvoker)"));
     }
 
     @Test
-    void acaoDesconhecidaEErro() {
-        var result = TemplateTransformer.transform(
-                "<button (click)=\"incrementarr()\">+</button>", "contador",
-                NO_METHODS, NO_METHODS, Set.of("incrementar"), NO_NULLABLE, NO_MESSAGES);
+    void bindingComChavesDuplasEAceitoComoAlternativaDeEscrita() {
+        var child = new TemplateTransformer.ChildRef("dev.jta.demo.Card", "meu-card", Set.of("ativo"), false);
+        TemplateTransformer.Result result = TemplateTransformer.transform(
+                "<div><meu-card [ativo]=\"{{ true }}\"/></div>", "pai-sel", NO_FIELDS, NO_METHODS,
+                NO_ACTIONS, NO_NULLABLE, NO_MESSAGES, Map.of("meu-card", child));
+
+        assertFalse(result.hasErrors(), errorsOf(result));
+        assertTrue(result.generatedJte().contains("\"ativo\", (Object)(true)"));
+    }
+
+    @Test
+    void tagDeFilhoNaoResolvidaEErroComDidYouMean() {
+        var child = new TemplateTransformer.ChildRef("dev.jta.demo.Card", "meu-card", Set.of(), false);
+        TemplateTransformer.Result result = TemplateTransformer.transform(
+                "<div><meu-crad/></div>", "pai-sel", NO_FIELDS, NO_METHODS, NO_ACTIONS, NO_NULLABLE, NO_MESSAGES,
+                Map.of("meu-card", child));
 
         assertTrue(result.hasErrors());
-        assertEquals("action", result.errors().get(0).kind());
+        assertTrue(result.errors().get(0).message().contains("meu-crad"));
+        assertTrue(result.errors().get(0).message().contains("meu-card"));
     }
 
     @Test
-    void primeiraTagAbertaGanhaAtributoDeEscopo() {
-        var result = TemplateTransformer.transform(
-                "<div><span>oi</span></div>", "meu-comp",
-                Set.of(), NO_METHODS, Set.of(), NO_NULLABLE, NO_MESSAGES);
+    void propertyBindingParaCampoNaoInputEErro() {
+        var child = new TemplateTransformer.ChildRef("dev.jta.demo.Card", "meu-card", Set.of("titulo"), false);
+        TemplateTransformer.Result result = TemplateTransformer.transform(
+                "<div><meu-card [naoExiste]=\"x\"/></div>", "pai-sel", Set.of("x"), NO_METHODS, NO_ACTIONS,
+                NO_NULLABLE, NO_MESSAGES, Map.of("meu-card", child));
 
-        assertTrue(result.generatedJte().startsWith("<div data-jta-component=\"meu-comp\">"));
+        assertTrue(result.hasErrors());
+        assertEquals("unknown-input", result.errors().get(0).kind());
     }
 
     @Test
-    void templateSemTagRaizNaoRecebeEscopo() {
-        var result = TemplateTransformer.transform(
-                "{{ nome }}", "meu-comp",
-                Set.of("nome"), NO_METHODS, Set.of(), NO_NULLABLE, NO_MESSAGES);
+    void raizDeBindingInexistenteNoPaiEErro() {
+        var child = new TemplateTransformer.ChildRef("dev.jta.demo.Card", "meu-card", Set.of("titulo"), false);
+        TemplateTransformer.Result result = TemplateTransformer.transform(
+                "<div><meu-card [titulo]=\"naoExiste\"/></div>", "pai-sel", NO_FIELDS, NO_METHODS, NO_ACTIONS,
+                NO_NULLABLE, NO_MESSAGES, Map.of("meu-card", child));
 
-        assertFalse(result.generatedJte().contains("data-jta-component"));
+        assertTrue(result.hasErrors());
+        assertEquals("input-binding-root", result.errors().get(0).kind());
     }
 
     @Test
-    void chaveDeTraducaoConhecidaViraChamadaDeTranslations() {
-        var result = TemplateTransformer.transform(
-                "<p>{{ 'saudacao.ola' | translate }}</p>", "meu-comp",
-                Set.of(), NO_METHODS, Set.of(), NO_NULLABLE, Set.of("saudacao.ola"));
+    void filhoAninhadoDentroDeForUsaVariavelDeLoopNoInput() {
+        var child = new TemplateTransformer.ChildRef("dev.jta.demo.Linha", "aluno-linha", Set.of("nome"), false);
+        String template = "<div>@for(var aluno : self.alunos())<aluno-linha [nome]=\"aluno.nome\"/>@endfor</div>";
+        TemplateTransformer.Result result = TemplateTransformer.transform(
+                template, "pai-sel", Set.of(), Set.of("alunos"), NO_ACTIONS, NO_NULLABLE, NO_MESSAGES,
+                Map.of("aluno-linha", child));
 
-        assertFalse(result.hasErrors());
+        assertFalse(result.hasErrors(), errorsOf(result));
+        assertTrue(result.generatedJte().contains("\"nome\", (Object)(aluno.nome)"));
+    }
+
+    @Test
+    void layoutUsadoComoFilhoEErro() {
+        var layout = new TemplateTransformer.ChildRef("dev.jta.demo.SiteLayout", "site-layout", Set.of(), true);
+        TemplateTransformer.Result result = TemplateTransformer.transform(
+                "<div><site-layout/></div>", "pai-sel", NO_FIELDS, NO_METHODS, NO_ACTIONS, NO_NULLABLE, NO_MESSAGES,
+                Map.of("site-layout", layout));
+
+        assertTrue(result.hasErrors());
+        assertEquals("child-is-layout", result.errors().get(0).kind());
+    }
+
+    @Test
+    void raizDoTemplateComoTagDeFilhoEErro() {
+        var child = new TemplateTransformer.ChildRef("dev.jta.demo.Card", "meu-card", Set.of(), false);
+        TemplateTransformer.Result result = TemplateTransformer.transform(
+                "<meu-card/>", "pai-sel", NO_FIELDS, NO_METHODS, NO_ACTIONS, NO_NULLABLE, NO_MESSAGES,
+                Map.of("meu-card", child));
+
+        assertTrue(result.hasErrors());
+        assertEquals("root-is-child", result.errors().get(0).kind());
+    }
+
+    // --- argumentos em acoes ---
+
+    @Test
+    void acaoComArgumentoSelfELiteralGeraQueryStringComUrlEncoding() {
+        String template = "<button (click)=\"remover(id, 'x&y', 42, true)\">Remover</button>";
+        TemplateTransformer.Result result = TemplateTransformer.transform(
+                template, "pai-sel", Set.of("id"), NO_METHODS,
+                Map.of("remover", List.of("String", "String", "int", "boolean")), NO_NULLABLE, NO_MESSAGES, NO_CHILDREN);
+
+        assertFalse(result.hasErrors(), errorsOf(result));
+        String jte = result.generatedJte();
+        assertTrue(jte.contains("__jtaArg0=${dev.jta.core.UrlEncoding.encode(self.id)}"));
+        assertTrue(jte.contains("__jtaArg1=x%26y")); // literal: url-encoded estaticamente, sem UrlEncoding.encode
+        assertTrue(jte.contains("__jtaArg2=42"));
+        assertTrue(jte.contains("__jtaArg3=true"));
+    }
+
+    @Test
+    void acaoComArgumentoDeVariavelDeLoopResolveSemPrefixoSelf() {
+        String template = "<div>@for(var aluno : self.alunos())"
+                + "<button (click)=\"remover(aluno.id)\">Remover</button>@endfor</div>";
+        TemplateTransformer.Result result = TemplateTransformer.transform(
+                template, "pai-sel", Set.of(), Set.of("alunos"), Map.of("remover", List.of("String")),
+                NO_NULLABLE, NO_MESSAGES, NO_CHILDREN);
+
+        assertFalse(result.hasErrors(), errorsOf(result));
+        assertTrue(result.generatedJte().contains("__jtaArg0=${dev.jta.core.UrlEncoding.encode(aluno.id)}"));
+    }
+
+    @Test
+    void aridadeIncompativelEErro() {
+        String template = "<button (click)=\"remover(id)\">Remover</button>";
+        TemplateTransformer.Result result = TemplateTransformer.transform(
+                template, "pai-sel", Set.of("id"), NO_METHODS, Map.of("remover", List.of()), NO_NULLABLE,
+                NO_MESSAGES, NO_CHILDREN);
+
+        assertTrue(result.hasErrors());
+        assertEquals("action-arity", result.errors().get(0).kind());
+    }
+
+    @Test
+    void raizDeArgumentoNaoEncontradaEErro() {
+        String template = "<button (click)=\"remover(naoExiste)\">Remover</button>";
+        TemplateTransformer.Result result = TemplateTransformer.transform(
+                template, "pai-sel", Set.of("id"), NO_METHODS, Map.of("remover", List.of("String")), NO_NULLABLE,
+                NO_MESSAGES, NO_CHILDREN);
+
+        assertTrue(result.hasErrors());
+        assertEquals("action-arg-root", result.errors().get(0).kind());
+    }
+
+    @Test
+    void variavelDeLoopComMesmoNomeDeCampoPublicoEErro() {
+        String template = "@for(var id : self.ids())<span>{{ id }}</span>@endfor";
+        TemplateTransformer.Result result = TemplateTransformer.transform(
+                template, "sel", Set.of("id"), Set.of("ids"), NO_ACTIONS, NO_NULLABLE, NO_MESSAGES, NO_CHILDREN);
+
+        assertTrue(result.hasErrors());
+        assertTrue(result.errors().stream().anyMatch(e -> e.kind().equals("loop-shadowing")));
+    }
+
+    // --- hx-include escopado por instancia ---
+
+    @Test
+    void hxIncludeUsaSeletorEscopadoPorInstanciaComExclusaoDeDoisNiveis() {
+        TemplateTransformer.Result result = TemplateTransformer.transform(
+                "<button (click)=\"salvar()\">Salvar</button>", "pai-sel", NO_FIELDS, NO_METHODS,
+                Map.of("salvar", List.of()), NO_NULLABLE, NO_MESSAGES, NO_CHILDREN);
+
+        assertFalse(result.hasErrors(), errorsOf(result));
         assertTrue(result.generatedJte().contains(
-                "${dev.jta.core.Translations.translate(\"saudacao.ola\")}"));
+                "hx-include=\"[data-jta-scope='${__jtaScope}'] :is(input,select,textarea)"
+                        + ":not([data-jta-scope='${__jtaScope}'] [data-jta-scope] :is(input,select,textarea))\""));
     }
 
     @Test
-    void chaveDeTraducaoDesconhecidaEErro() {
-        var result = TemplateTransformer.transform(
-                "<p>{{ 'saudacao.ola' | translate }}</p>", "meu-comp",
-                Set.of(), NO_METHODS, Set.of(), NO_NULLABLE, Set.of());
+    void raizDeclaraVariavelDeEscopoEAtributoDataJtaScope() {
+        TemplateTransformer.Result result = TemplateTransformer.transform(
+                "<div>{{ x }}</div>", "sel", Set.of("x"), NO_METHODS, NO_ACTIONS, NO_NULLABLE, NO_MESSAGES, NO_CHILDREN);
 
-        assertTrue(result.hasErrors());
-        assertEquals("i18n", result.errors().get(0).kind());
+        assertFalse(result.hasErrors(), errorsOf(result));
+        String jte = result.generatedJte();
+        assertTrue(jte.contains("!{long __jtaScope = dev.jta.runtime.RenderScope.next();}"));
+        assertTrue(jte.contains("data-jta-component=\"sel\""));
+        assertTrue(jte.contains("data-jta-scope=\"${__jtaScope}\""));
+    }
+
+    // --- rastreador de escopo de @for ---
+
+    @Test
+    void scanLoopScopesDetectaLoopsAninhados() {
+        String template = "@for(var a : self.as())X@for(var b : self.bs())Y@endfor Z@endfor";
+        List<TemplateTransformer.LoopScope> scopes = TemplateTransformer.scanLoopScopes(template);
+
+        assertEquals(2, scopes.size());
+        TemplateTransformer.LoopScope outer = scopes.stream().filter(s -> s.varName().equals("a")).findFirst().orElseThrow();
+        TemplateTransformer.LoopScope inner = scopes.stream().filter(s -> s.varName().equals("b")).findFirst().orElseThrow();
+        assertTrue(outer.start() < inner.start());
+        assertTrue(outer.end() > inner.end());
     }
 
     @Test
-    void campoNullableSemSufixoEErro() {
-        var result = TemplateTransformer.transform(
-                "<p>{{ apelido }}</p>", "meu-comp",
-                Set.of("apelido"), NO_METHODS, Set.of(), Set.of("apelido"), NO_MESSAGES);
-
-        assertTrue(result.hasErrors());
-        assertEquals("nullability", result.errors().get(0).kind());
+    void scanChildTagNamesEncontraTagsComHifenAutoFechadas() {
+        Set<String> names = TemplateTransformer.scanChildTagNames("<div><meu-card/><router-outlet/><input/></div>");
+        assertEquals(Set.of("meu-card", "router-outlet"), names);
     }
 
-    @Test
-    void campoNullableComSufixoSeguroNaoEErro() {
-        var result = TemplateTransformer.transform(
-                "<p>{{ apelido? }}</p>", "meu-comp",
-                Set.of("apelido"), NO_METHODS, Set.of(), Set.of("apelido"), NO_MESSAGES);
-
-        assertFalse(result.hasErrors());
-        assertTrue(result.generatedJte().contains("self.apelido == null ? \"\" : self.apelido"));
-    }
-
-    @Test
-    void campoNullableComSufixoAssertNonNull() {
-        var result = TemplateTransformer.transform(
-                "<p>{{ apelido! }}</p>", "meu-comp",
-                Set.of("apelido"), NO_METHODS, Set.of(), Set.of("apelido"), NO_MESSAGES);
-
-        assertFalse(result.hasErrors());
-        assertTrue(result.generatedJte().contains("java.util.Objects.requireNonNull(self.apelido"));
-    }
-
-    @Test
-    void arrobaLiteralForaDeUmaDiretivaConhecidaEErro() {
-        var result = TemplateTransformer.transform(
-                "<p>Fale com a gente: contato@exemplo.com</p>", "meu-comp",
-                Set.of(), NO_METHODS, Set.of(), NO_NULLABLE, NO_MESSAGES);
-
-        assertTrue(result.hasErrors());
-        assertEquals("stray-at-sign", result.errors().get(0).kind());
-    }
-
-    @Test
-    void diretivasJteConhecidasPassamDiretoSemErro() {
-        var result = TemplateTransformer.transform(
-                "<ul>@for(var x : self.itens)<li>${x}</li>@endfor</ul>", "meu-comp",
-                Set.of(), NO_METHODS, Set.of(), NO_NULLABLE, NO_MESSAGES);
-
-        assertFalse(result.hasErrors());
+    private static String errorsOf(TemplateTransformer.Result result) {
+        StringBuilder sb = new StringBuilder();
+        for (TemplateTransformer.ValidationError e : result.errors()) {
+            sb.append(e.kind()).append(": ").append(e.message()).append('\n');
+        }
+        return sb.toString();
     }
 }

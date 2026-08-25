@@ -83,7 +83,10 @@ public final class JtaPageDispatcher {
         invoker.callInitIfPresent(instance);
 
         StringOutput pageOutput = new StringOutput();
-        templateEngine.render(metadata.generatedJteTemplate(), instance, pageOutput);
+        Map<String, Object> renderParams = new LinkedHashMap<>();
+        renderParams.put("self", instance);
+        renderParams.put("__jtaInvoker", invoker);
+        templateEngine.render(metadata.generatedJteTemplate(), renderParams, pageOutput);
         String pageHtml = pageOutput.toString();
 
         String bodyHtml = metadata.hasLayout() ? renderWithLayout(metadata, pageHtml) : pageHtml;
@@ -116,6 +119,7 @@ public final class JtaPageDispatcher {
         Map<String, Object> params = new LinkedHashMap<>();
         params.put("self", layoutInstance);
         params.put("content", pageHtml);
+        params.put("__jtaInvoker", invoker);
 
         StringOutput layoutOutput = new StringOutput();
         templateEngine.render(layoutMetadata.generatedJteTemplate(), params, layoutOutput);
