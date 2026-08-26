@@ -1,0 +1,13 @@
+# Formato ServiceLoader (uma FQCN por linha) - e o que
+# io.quarkus.deployment.ExtensionLoader#loadStepsFrom le
+# (ServiceUtil.classesNamedIn(classLoader, "META-INF/quarkus-build-steps.list"))
+# para descobrir quais classes deste modulo tem metodos @BuildStep.
+#
+# Extensoes publicadas normalmente ganham este arquivo via o pipeline de
+# build/release padrao do ecossistema Quarkus (o mesmo arquivo existe, por
+# exemplo, dentro de quarkus-core-deployment.jar) - sem ele, o
+# ExtensionLoader nao encontra NENHUM @BuildStep daqui e a augmentation
+# "funciona" sem erro nenhum, so que sem registrar rota alguma (bug real
+# encontrado rodando QuarkusJtaTckTest pela primeira vez: todo GET virava
+# 404, action virava 405, e "Installed features" nunca listava "jta").
+dev.jta.quarkus.deployment.JtaProcessor

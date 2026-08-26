@@ -10,12 +10,14 @@ import dev.jta.runtime.JtaActionDispatcher;
 import dev.jta.runtime.JtaPageDispatcher;
 import dev.jta.runtime.JtaTemplateEngineFactory;
 import dev.jta.runtime.PageResult;
+import dev.jta.runtime.SseHub;
 import dev.jta.runtime.csrf.CsrfRequest;
 import dev.jta.runtime.csrf.CsrfTokenStore;
 import dev.jta.runtime.csrf.CsrfTokenStoreFactory;
 import gg.jte.TemplateEngine;
 import io.javalin.Javalin;
 import io.javalin.http.Context;
+import io.javalin.http.sse.SseClient;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -25,8 +27,12 @@ import java.util.Map;
 
 /**
  * Liga o JTA a um {@link Javalin} ja criado: registra um GET por
- * {@code @Route} e o endpoint generico de acoes HTMX
- * ({@code POST /__jta/action/{selector}}).
+ * {@code @Route}, o endpoint generico de acoes HTMX
+ * ({@code POST /__jta/action/{selector}}) e um endpoint SSE por
+ * {@code @Sse}, este ultimo em cima do suporte nativo do Javalin
+ * ({@code app.sse(...)}, que ja resolve keep-alive/deteccao de
+ * desconexao sobre o Jetty embutido) bridgeado para {@link SseHub}
+ * (jta-runtime, agnostico de framework - ver {@link dev.jta.core.Sse}).
  *
  * <p><b>Adaptador fino:</b> so extrai path params/query params/form data do
  * {@link Context} do Javalin e traduz {@link PageResult}/{@link ActionResult}
@@ -87,6 +93,16 @@ public final class JtaJavalin {
             app.unsafe.routes.get(page.routePath(), ctx -> handlePage(ctx, page, pageDispatcher, config));
         }
         app.unsafe.routes.post("/__jta/action/{selector}", ctx -> handleAction(ctx, actionDispatcher, csrfTokenStore, config));
+
+        SseHub sseHub = new SseHub(registry, invoker, templateEngine);
+        List<ComponentMetadata> sseComponents = sseHub.sseComponents();
+        if (!sseComponents.isEmpty()) {
+            sseHub.start();
+            app.unsafe.events.serverStopping(sseHub::stop);
+            for (ComponentMetadata sse : sseComponents) {
+                app.unsafe.routes.sse(sse.ssePath(), client -> handleSse(client, sseHub, sse.ssePath(), config));
+            }
+        }
     }
 
     /** Atalho de conveniencia com a configuracao default (sem DI, sem autenticacao). */
@@ -179,6 +195,29 @@ public final class JtaJavalin {
         }
         ActionResult.Rendered rendered = (ActionResult.Rendered) result;
         ctx.html(rendered.html());
+    }
+
+    /**
+     * Bridge do suporte SSE nativo do Javalin ({@link SseClient}) para
+     * {@link SseHub}: autoriza a conexao contra {@code @RequiresRole}
+     * (mesma checagem de {@link #handlePage}/{@link #handleAction}, agora
+     * tambem aplicada aqui - ver SECURITY.md, achado #4), inscreve um
+     * {@link SseHub.Subscriber} que empurra cada tick para
+     * {@link SseClient#sendEvent(Object)} e desinscreve no fechamento da
+     * conexao (Javalin/Jetty ja detecta isso por baixo).
+     */
+    private static void handleSse(SseClient client, SseHub hub, String path, JtaJavalinConfig config) {
+        CurrentUser user = config.currentUserResolver().apply(client.ctx());
+        if (!hub.isAuthorized(path, user)) {
+            client.ctx().status(403);
+            client.close();
+            return;
+        }
+
+        client.keepAlive();
+        SseHub.Subscriber subscriber = data -> client.sendEvent(data);
+        hub.subscribe(path, subscriber);
+        client.onClose(() -> hub.unsubscribe(path, subscriber));
     }
 
     private static Map<String, String[]> toArrayMap(Map<String, List<String>> source) {

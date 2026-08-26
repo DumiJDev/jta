@@ -201,6 +201,60 @@ detalhe completo, incluindo por que o modo "on-demand" cru do JTE
 (`TemplateEngine.create` de 2 argumentos) não funciona aqui sem o
 classpath da aplicação.
 
+## Compatibilidade entre adaptadores (TCK)
+
+`jta-tck` é um TCK (Technology Compatibility Kit) compartilhado: a mesma
+bateria de testes de contrato HTTP (`AbstractJtaTck`) roda contra os 4
+adaptadores (Spring, Javalin, standalone, Quarkus), cada um subindo um
+servidor real com as mesmas fixtures e declarando, via
+`JtaAdapterHarness#supportedFeatures()`, quais features suporta hoje. O
+que um adaptador não declarar vira um skip nomeado e visível no relatório
+do Surefire (nunca um "passa" silencioso).
+
+Matriz gerada rodando `mvn test` (ou `verify`) nos módulos adaptadores —
+o que escreve `target/jta-tck-report.properties` em cada um — seguido de
+`java -cp jta-tck/target/classes dev.jta.tck.CompatibilityMatrixGenerator .`:
+
+<!-- JTA-TCK-MATRIX-BEGIN (gerado por CompatibilityMatrixGenerator - nao editar a mao) -->
+| Feature | Javalin | Quarkus | Spring | Standalone |
+|---|---|---|---|---|
+| Roteamento (@Route + path variables) | ✅ | ✅ | ✅ | ✅ |
+| Acoes HTMX (POST /__jta/action/{selector}) | ✅ | ✅ | ✅ | ✅ |
+| Allowlist de acoes (metodo nao declarado -> 404, nao invocacao arbitraria) | ✅ | ✅ | ✅ | ✅ |
+| Autorizacao por role (@RequiresRole) - acesso nao autenticado a pagina restrita | ✅ | ✅ | ✅ | ✅ |
+| Server-Sent Events (@Sse) | ✅ | ✅ | ✅ | ✅ |
+| i18n / traducao (Translations.translate) | ✅ | ⛔ | ✅ | ✅ |
+| Protecao CSRF nativa (double-submit HMAC) | ⛔ | ⛔ | ⛔ | ⛔ |
+| Sessao agnostica de framework | ⛔ | ⛔ | ⛔ | ⛔ |
+| Upload de arquivo (multipart/form-data) | ⛔ | ⛔ | ⛔ | ⛔ |
+| Composicao de componentes com argumentos (@Use + @Input) | ⛔ | ⛔ | ⛔ | ⛔ |
+<!-- JTA-TCK-MATRIX-END -->
+
+✅ suportado e verificado pelo TCK · ⛔ não suportado ainda (skip nomeado,
+com o motivo no relatório do Surefire) — nenhuma linha ❌ hoje, que seria
+uma feature declarada suportada mas que o TCK provou quebrada.
+
+Um ⛔ significa apenas que o adaptador não **declara** a feature em
+`supportedFeatures()` — não que ela não exista no framework. CSRF nativo,
+sessão agnóstica, upload de arquivo e composição de componentes
+(`@Use`/`@Input`) já estão implementados no `jta-runtime` e nos
+adaptadores, e o TCK já tem o probe de cada um em `AbstractJtaTck`; o que
+falta é cada `JtaAdapterHarness` passar a declará-los (e expor as
+fixtures/URLs que o probe pede) para a linha virar ✅. Enquanto isso, o
+skip fica nomeado e visível no relatório do Surefire.
+
+O ⛔ de natureza diferente é i18n no Quarkus: `dev.jta.core.Translations`
+resolve o `ResourceBundle` pelo classloader da classe chamadora, e sob o
+`QuarkusClassLoader` em camadas isso não enxerga `messages.properties` da
+aplicação — corrigir exige mexer em `Translations.java`, e o adaptador
+deliberadamente não declara a feature em vez de fingir suporte.
+
+`CompatibilityMatrixGenerator ... --check` compara a matriz gerada contra
+este bloco e sai com código 1 se divergir — ainda não está ligado ao CI
+(`.github/workflows/build.yml`); falta um passo que rode `mvn verify` em
+todos os módulos adaptadores antes de invocar o `--check` (documentado
+como follow-up).
+
 ## Limitações honestas
 
 - Layouts aninhados (`@Layout` usando outro `@Layout`) não são suportados.
@@ -213,10 +267,13 @@ classpath da aplicação.
   `4.0.0-beta6` conscientemente (ver [`SECURITY.md`](./SECURITY.md) e
   [`CHANGELOG.md`](./CHANGELOG.md)); sobrescreva `[htmx] cdn_url` em
   `jta.config.toml` se preferir a série 2.x.
-- Só existe adaptador para Spring Boot ainda. `jta-runtime` já extraiu o
-  núcleo agnóstico (ver "Arquitetura" acima) especificamente para reduzir
-  esse gap — Quarkus/Javalin/standalone/plugin Gradle ficam mais baratos
-  de construir agora, mas ainda não existem.
+- Existem 4 adaptadores (Spring, Javalin, standalone, Quarkus) sobre o
+  mesmo núcleo agnóstico `jta-runtime`, mas nem toda feature está em
+  paridade entre eles — ver a matriz de compatibilidade do TCK acima.
+- A matriz do TCK ainda subdeclara o que o framework faz: os harnesses dos
+  adaptadores não declaram CSRF, sessão, upload e composição de
+  componentes, embora as features existam e os probes já estejam escritos
+  — ver a nota na seção do TCK.
 
 Histórico completo de decisões, features e bugs corrigidos:
 [`CHANGELOG.md`](./CHANGELOG.md) · [`TROUBLESHOOTING.md`](./TROUBLESHOOTING.md).

@@ -6,10 +6,12 @@ import dev.jta.runtime.ComponentInvoker;
 import dev.jta.runtime.JtaActionDispatcher;
 import dev.jta.runtime.JtaPageDispatcher;
 import dev.jta.runtime.JtaTemplateEngineFactory;
+import dev.jta.runtime.SseHub;
 import dev.jta.runtime.csrf.CsrfTokenStore;
 import dev.jta.runtime.csrf.CsrfTokenStoreFactory;
 import gg.jte.TemplateEngine;
 import jakarta.enterprise.context.ApplicationScoped;
+import jakarta.enterprise.inject.Disposes;
 import jakarta.enterprise.inject.Instance;
 import jakarta.enterprise.inject.Produces;
 import jakarta.inject.Singleton;
@@ -81,5 +83,25 @@ class JtaCdiProducers {
         // ObjectProvider<Validator> do starter Spring.
         return new JtaActionDispatcher(registry, invoker, templateEngine,
                 validator.isResolvable() ? validator.get() : null, csrfTokenStore);
+    }
+
+    /**
+     * {@link SseHub} compartilhado por toda conexao {@code @Sse} - criado
+     * (e o agendador de re-render iniciado, ver {@link SseHub#start()})
+     * na primeira resolucao pelo Arc, tipicamente na primeira conexao SSE
+     * real ({@link JtaSseRouteHandler}). {@code ApplicationScoped} para
+     * existir uma unica instancia por aplicacao, igual aos demais beans
+     * centrais deste producer.
+     */
+    @Produces
+    @ApplicationScoped
+    SseHub sseHub(ComponentRegistry registry, ComponentInvoker invoker, TemplateEngine templateEngine) {
+        SseHub hub = new SseHub(registry, invoker, templateEngine);
+        hub.start();
+        return hub;
+    }
+
+    void disposeSseHub(@Disposes SseHub hub) {
+        hub.stop();
     }
 }

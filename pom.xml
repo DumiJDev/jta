@@ -76,6 +76,7 @@
         <module>jta-javalin-starter</module>
         <module>jta-standalone</module>
         <module>jta-quarkus-extension</module>
+        <module>jta-tck</module>
         <module>jta-cli</module>
         <module>jta-test</module>
     </modules>

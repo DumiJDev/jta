@@ -10,8 +10,12 @@ import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
+import java.util.Optional;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.TimeUnit;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
+import java.util.stream.Stream;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -169,5 +173,39 @@ class JtaJavalinIntegrationTest {
                 HttpResponse.BodyHandlers.ofString());
 
         assertEquals(500, response.statusCode());
+    }
+
+    @Test
+    void endpointSseTransmiteHtmlRenderizadoParaClienteConectado() throws Exception {
+        // Accept: text/event-stream e obrigatorio - o SseHandler nativo do
+        // Javalin (bridgeado por JtaJavalin) so entra em modo SSE de verdade
+        // se o cliente declarar isso (o mesmo header que um EventSource de
+        // navegador ja manda sozinho); sem ele, cai numa resposta 200 vazia.
+        HttpRequest request = HttpRequest.newBuilder(URI.create(baseUrl() + "/sse/placar"))
+                .header("Accept", "text/event-stream")
+                .GET().build();
+
+        // JtaJavalin bridgeia app.sse(...) para SseHub (jta-runtime): a
+        // conexao fica aberta e o hub reenvia o HTML re-renderizado a cada
+        // tick (intervalMillis=50 no fixture Placar) - lemos so a primeira
+        // linha "data:" para provar que a inscricao/broadcast funcionam,
+        // sem esperar o stream (infinito) terminar sozinho.
+        CompletableFuture<Optional<String>> firstDataLine = CompletableFuture.supplyAsync(() -> {
+            try {
+                HttpResponse<Stream<String>> response = client.send(request, HttpResponse.BodyHandlers.ofLines());
+                assertEquals(200, response.statusCode());
+                // try-with-resources: so consumir a primeira linha (findFirst)
+                // sem fechar o Stream deixaria a conexao SSE pendurada.
+                try (Stream<String> lines = response.body()) {
+                    return lines.filter(line -> line.startsWith("data:")).findFirst();
+                }
+            } catch (Exception e) {
+                throw new RuntimeException(e);
+            }
+        });
+
+        Optional<String> dataLine = firstDataLine.get(5, TimeUnit.SECONDS);
+        assertTrue(dataLine.isPresent());
+        assertTrue(dataLine.get().contains(">7<"));
     }
 }

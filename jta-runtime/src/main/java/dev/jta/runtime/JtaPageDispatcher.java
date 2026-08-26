@@ -102,7 +102,7 @@ public final class JtaPageDispatcher {
 
         Object instance;
         try {
-            Class<?> type = Class.forName(metadata.fqn());
+            Class<?> type = Class.forName(metadata.fqn(), true, Thread.currentThread().getContextClassLoader());
             instance = invoker.instantiate(type);
         } catch (ClassNotFoundException e) {
             throw new IllegalStateException("Classe do componente nao encontrada: " + metadata.fqn(), e);
@@ -150,7 +150,8 @@ public final class JtaPageDispatcher {
 
         Object layoutInstance;
         try {
-            layoutInstance = invoker.instantiate(Class.forName(layoutMetadata.fqn()));
+            Class<?> type = Class.forName(layoutMetadata.fqn(), true, Thread.currentThread().getContextClassLoader());
+            layoutInstance = invoker.instantiate(type);
         } catch (ClassNotFoundException e) {
             throw new IllegalStateException("Classe do layout nao encontrada: " + layoutMetadata.fqn(), e);
         }

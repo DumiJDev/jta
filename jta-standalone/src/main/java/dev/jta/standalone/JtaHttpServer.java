@@ -13,6 +13,7 @@ import dev.jta.runtime.JtaErrorPageRenderer;
 import dev.jta.runtime.JtaPageDispatcher;
 import dev.jta.runtime.JtaTemplateEngineFactory;
 import dev.jta.runtime.PageResult;
+import dev.jta.runtime.SseHub;
 import dev.jta.runtime.csrf.CsrfRequest;
 import dev.jta.runtime.csrf.CsrfTokenStore;
 import dev.jta.runtime.csrf.CsrfTokenStoreFactory;
@@ -35,6 +36,7 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Executors;
 
 /**
@@ -50,6 +52,13 @@ import java.util.concurrent.Executors;
  * estado, render) esta em {@link JtaPageDispatcher}/{@link JtaActionDispatcher}
  * (jta-runtime, agnostico de framework). Mesmo padrao dos outros
  * adaptadores (Spring, Javalin, Quarkus).
+ *
+ * <p>SSE (um {@code @Sse}) usa o mesmo {@link SseHub} (jta-runtime,
+ * agnostico de framework) que os outros adaptadores - como
+ * {@code com.sun.net.httpserver} nao tem nenhum helper de SSE pronto,
+ * este adaptador mantem a {@link HttpExchange} aberta (bloqueando a thread
+ * virtual da conexao ate o cliente desconectar) e escreve cada evento
+ * como {@code data: <html>\n\n}, dando flush apos cada escrita.
  */
 public final class JtaHttpServer {
 
@@ -57,9 +66,11 @@ public final class JtaHttpServer {
     private static final String ACTION_PREFIX = "/__jta/action/";
 
     private final HttpServer httpServer;
+    private final SseHub sseHub;
 
-    private JtaHttpServer(HttpServer httpServer) {
+    private JtaHttpServer(HttpServer httpServer, SseHub sseHub) {
         this.httpServer = httpServer;
+        this.sseHub = sseHub;
     }
 
     /**
@@ -106,8 +117,18 @@ public final class JtaHttpServer {
             HttpServer server = HttpServer.create(new InetSocketAddress(port), 0);
             server.setExecutor(Executors.newVirtualThreadPerTaskExecutor());
             server.createContext(ACTION_PREFIX, exchange -> handleAction(exchange, actionDispatcher, csrfTokenStore, sessionStore, jtaConfig, config, errorPageRenderer));
+
+            SseHub sseHub = new SseHub(registry, invoker, templateEngine);
+            List<ComponentMetadata> sseComponents = sseHub.sseComponents();
+            if (!sseComponents.isEmpty()) {
+                sseHub.start();
+                for (ComponentMetadata sse : sseComponents) {
+                    server.createContext(sse.ssePath(), exchange -> handleSse(exchange, sseHub, sse.ssePath(), config));
+                }
+            }
+
             server.createContext("/", exchange -> handlePage(exchange, pageRoutes, pageDispatcher, sessionStore, jtaConfig, config, errorPageRenderer));
-            return new JtaHttpServer(server);
+            return new JtaHttpServer(server, sseHub);
         } catch (IOException e) {
             throw new UncheckedIOException("Falha ao criar o HttpServer na porta " + port, e);
         }
@@ -118,6 +139,7 @@ public final class JtaHttpServer {
     }
 
     public void stop() {
+        sseHub.stop();
         httpServer.stop(0);
     }
 
@@ -300,6 +322,62 @@ public final class JtaHttpServer {
             }
         }
         return null;
+    }
+
+    /**
+     * Bridge do endpoint {@code @Sse} para {@link SseHub}: autoriza a
+     * conexao contra {@code @RequiresRole} (mesma checagem de
+     * {@link #handlePage}/{@link #handleAction}, agora tambem aplicada
+     * aqui - ver SECURITY.md, achado #4), depois mantem a
+     * {@link HttpExchange} aberta escrevendo cada evento do hub como
+     * {@code data: <html>\n\n} (uma linha {@code data:} por linha do HTML,
+     * formato padrao SSE) e dando flush apos cada escrita.
+     *
+     * <p>Sem callback de desconexao no {@code com.sun.net.httpserver}: a
+     * thread da conexao (virtual - ver {@link #create}) bloqueia num
+     * {@link CountDownLatch} ate a proxima tentativa de escrita falhar
+     * (cliente desconectado), o mesmo atraso ja presente no modelo de
+     * polling por intervalo do {@code @Sse} (ver {@link dev.jta.core.Sse}).
+     */
+    private static void handleSse(HttpExchange exchange, SseHub hub, String path, JtaStandaloneConfig config)
+            throws IOException {
+        if (!"GET".equals(exchange.getRequestMethod())) {
+            sendResponse(exchange, 405, "");
+            return;
+        }
+
+        CurrentUser user = config.currentUserResolver().apply(exchange);
+        if (!hub.isAuthorized(path, user)) {
+            sendResponse(exchange, 403, "");
+            return;
+        }
+
+        exchange.getResponseHeaders().set("Content-Type", "text/event-stream; charset=utf-8");
+        exchange.getResponseHeaders().set("Cache-Control", "no-cache");
+        exchange.getResponseHeaders().set("Connection", "keep-alive");
+        exchange.sendResponseHeaders(200, 0); // 0 = chunked, tamanho desconhecido - conexao fica aberta
+        OutputStream out = exchange.getResponseBody();
+
+        CountDownLatch disconnected = new CountDownLatch(1);
+        SseHub.Subscriber subscriber = data -> {
+            try {
+                String event = "data: " + data.replace("\n", "\ndata: ") + "\n\n";
+                out.write(event.getBytes(StandardCharsets.UTF_8));
+                out.flush();
+            } catch (IOException e) {
+                disconnected.countDown();
+                throw e;
+            }
+        };
+        hub.subscribe(path, subscriber);
+        try {
+            disconnected.await();
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        } finally {
+            hub.unsubscribe(path, subscriber);
+            exchange.close();
+        }
     }
 
     private static String firstValue(Map<String, String[]> params, String key) {

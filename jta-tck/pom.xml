@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <parent>
+        <groupId>dev.jta</groupId>
+        <artifactId>jta-parent</artifactId>
+        <version>0.1.0-SNAPSHOT</version>
+    </parent>
+
+    <artifactId>jta-tck</artifactId>
+    <packaging>jar</packaging>
+    <name>jta-tck</name>
+    <description>
+        Technology Compatibility Kit: suite de testes de contrato HTTP
+        compartilhada pelos 4 adaptadores (Spring, Javalin, standalone,
+        Quarkus). Cada adaptador depende deste modulo em escopo de teste,
+        estende AbstractJtaTck com um JtaAdapterHarness apontando para
+        fixtures/servidor proprios, e roda a mesma bateria de testes -
+        onde uma feature nao e suportada, o teste correspondente vira um
+        skip nomeado e visivel (org.junit.jupiter.api.Assumptions), nunca
+        um "passa" silencioso. CompatibilityMatrixGenerator agrega os
+        relatorios de cada modulo (target/jta-tck-report.properties) numa
+        matriz Markdown feature x adaptador.
+
+        Zero-dependencias alem do JUnit Jupiter API (mesmo espirito de
+        jta-core): os testes operam so na fronteira HTTP (java.net.http),
+        sem depender de jta-core/jta-runtime nem de nenhum adaptador -
+        um TCK que precisasse dos internals do proprio framework para
+        validar o framework nao provaria muita coisa.
+    </description>
+
+    <dependencies>
+        <dependency>
+            <groupId>org.junit.jupiter</groupId>
+            <artifactId>junit-jupiter-api</artifactId>
+            <version>${junit.version}</version>
+        </dependency>
+    </dependencies>
+</project>

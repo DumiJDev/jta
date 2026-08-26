@@ -9,8 +9,12 @@ import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
+import java.util.Optional;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.TimeUnit;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
+import java.util.stream.Stream;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -508,5 +512,33 @@ class JtaHttpServerIntegrationTest {
 
         assertEquals(403, response.statusCode());
         assertTrue(response.body().isEmpty());
+    }
+
+    @Test
+    void endpointSseTransmiteHtmlRenderizadoParaClienteConectado() throws Exception {
+        HttpRequest request = HttpRequest.newBuilder(URI.create(baseUrl() + "/sse/placar")).GET().build();
+
+        // JtaHttpServer mantem a HttpExchange aberta e escreve eventos de
+        // SseHub (jta-runtime) diretamente no OutputStream - lemos so a
+        // primeira linha "data:" para provar a inscricao/broadcast, sem
+        // esperar o stream (infinito) terminar sozinho.
+        CompletableFuture<Optional<String>> firstDataLine = CompletableFuture.supplyAsync(() -> {
+            try {
+                HttpResponse<Stream<String>> response = client.send(request, HttpResponse.BodyHandlers.ofLines());
+                assertEquals(200, response.statusCode());
+                assertEquals("text/event-stream; charset=utf-8", response.headers().firstValue("Content-Type").orElse(null));
+                // try-with-resources: so consumir a primeira linha (findFirst)
+                // sem fechar o Stream deixaria a conexao SSE pendurada.
+                try (Stream<String> lines = response.body()) {
+                    return lines.filter(line -> line.startsWith("data:")).findFirst();
+                }
+            } catch (Exception e) {
+                throw new RuntimeException(e);
+            }
+        });
+
+        Optional<String> dataLine = firstDataLine.get(5, TimeUnit.SECONDS);
+        assertTrue(dataLine.isPresent());
+        assertTrue(dataLine.get().contains(">7<"));
     }
 }
