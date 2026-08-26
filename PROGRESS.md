@@ -1,125 +1,139 @@
-# Estado da execução do plano-mestre JTA (sessão 2026-08-25)
+# Estado da execução do plano-mestre JTA
+
+## 2026-08-26 — Reconciliação concluída, fases 3/4/5 em master
+
+Os 4 streams descritos na secção "sessão 2026-08-25" (abaixo) foram todos
+terminados, commitados e reconciliados em `master`. `master` está em `1fc5c02`,
+pushed para `origin`, build completo (`mvn clean install`, reactor inteiro)
+verde. Os worktrees e branches de cada stream foram removidos (já estão
+integrados via os merges abaixo, não há mais nada a recuperar deles).
+
+Cadeia de merges (`git log --graph` a partir de `d2f2f04`):
+```
+1fc5c02 Reconcilia fase 5a (SSE + TCK) com fases 3/4/5b e master
+c3dab36 Reconcilia fase 5b (ferramentas) com fases 3/4 e master
+7c792d8 Reconcilia fase 3 (correcao de dados) com fase 4 e master
+7bfe39c Reconcilia fase 4 restante (slots, flash, upload, paginas de erro) com master
+d2f2f04 Remove jta-demo (gestão escolar) para reconstruir o exemplo do zero
+```
+
+Com isto, **as fases 0-5 do plano-mestre estão todas fechadas em master**,
+com as ressalvas/gaps documentados abaixo (nada é silencioso — cada um está
+declarado no código, no README ou na matriz de compatibilidade do TCK).
+
+### Bug real encontrado durante a reconciliação (já corrigido)
+
+`SseHub.broadcast` (`jta-runtime/src/main/java/dev/jta/runtime/SseHub.java`)
+usava a assinatura antiga de `render(name, instance, output)` do jte. Assim
+que a composição de componentes (`@Use`/`@Input`) aterrou, os templates
+gerados passaram a exigir um segundo parâmetro (`__jtaInvoker`), e todo
+`broadcast` começou a rebentar com `IllegalArgumentException: wrong number
+of arguments` — engolido silenciosamente pelo catch como WARN. Resultado:
+**todo endpoint `@Sse`, nos 4 adapters, estava mudo desde que a composição
+foi introduzida.** Corrigido para a forma de `Map` (`self` + `__jtaInvoker`),
+igual ao `JtaPageDispatcher`/`JtaErrorPageRenderer`. Só foi detetado porque
+o passo final de verificação correu `mvn clean` antes de testar — um
+`target/` com o template antigo compilado escondia o bug.
+
+### Gaps conhecidos, documentados (não são silenciosos)
+
+- **i18n por-requisição**: só o Spring adapter resolve `Accept-Language` via
+  `LocaleResolver`. Javalin/standalone/Quarkus continuam em
+  `Locale.getDefault()` — sem regressão, mas sem locale por-requisição.
+- **Upload + error-pages-como-componente**: só Spring e standalone têm
+  wiring completo. Javalin e Quarkus compilam (overload preservado) mas sem
+  a feature.
+- **Slots**: só slot default (sem nome) é suportado — sem slots nomeados.
+- **i18n no Quarkus** (feature diferente da acima): a TCK marca isto como
+  gap explícito — `Translations` resolve `ResourceBundle` pelo classloader
+  errado sob o `QuarkusClassLoader`.
+- **`jta-gradle-plugin`**: aplica `gg.jte.gradle` e propaga
+  `-Ajta.resourcesDir`, mas o `JtaAnnotationProcessor` ainda não lê essa
+  flag — o plugin existe, mas o dev-loop Gradle não está fechado ponta-a-ponta.
+- **Maven Central**: config pronta (`io.github.dumijdev`, licenses, scm,
+  gpg/javadoc/sources plugins, `central-publishing-maven-plugin`) mas
+  **nenhum deploy real foi feito** — falta decisão + execução do utilizador.
+- **`jta-test`**: CSRF/sessão ainda não são mockáveis no harness (documentado
+  em `package-info.java`).
+- **`scripts/check-compat-matrix.sh`** (CI gate comparando a matriz TCK
+  gerada com o README): referenciado mas não criado — o check funciona
+  manualmente (`CompatibilityMatrixGenerator --check`), só não está no CI.
+
+## Próximo passo: reconstruir o jta-demo
+
+`jta-demo` (gestão escolar) foi removido deliberadamente em `d2f2f04` — o
+utilizador não queria mais aquele domínio e pediu um exemplo pensado para
+atrair contribuidores, com bloco técnico intencional: forçar o uso orgânico
+de SSE, upload, composição/slots, CSRF e i18n (decisão tomada via
+AskUserQuestion na sessão 2026-08-25/26, opção "Showcase técnico deliberado").
+
+Isto **agora pode ser feito contra o master atual** (antes não fazia
+sentido — as features que o demo deveria mostrar só existiam nos branches
+não reconciliados). Nenhum domínio/nome foi decidido ainda.
+
+Sugestão levantada mas não confirmada com o utilizador: um mini quadro
+Kanban colaborativo em tempo real (tipo Trello) — mapeia bem para todas as
+features:
+- Composição/slots: Board → List → Card, com slot para badges/anexos no Card.
+- SSE: outros utilizadores veem mudanças ao vivo no mesmo board.
+- Upload: anexos em cards, avatar de utilizador.
+- CSRF: todos os forms de mutação.
+- Converters (fase 3): data de vencimento (LocalDate), prioridade (enum),
+  responsável (UUID), labels (multi-valor/List<String>).
+- i18n: interface PT/EN via Accept-Language.
+- Flash + error pages: confirmações de ação, board não encontrado/sem acesso.
+- Sessão/roles: dono vs membro do board.
+
+Antes de construir: confirmar domínio/nome com o utilizador (não assumir o
+Kanban só porque foi a primeira ideia proposta).
+
+## Notas operacionais para a próxima sessão
+
+- Vários agentes paralelos nesta sessão sofreram interrupções (limite de
+  sessão da conta, stalls de watchdog de stream, 1 kill manual do
+  utilizador). Nenhuma indicou bug no trabalho em si — só instabilidade de
+  infraestrutura. Em todos os casos o caminho certo foi **retomar o mesmo
+  worktree/branch** (nunca recriar do zero), porque o trabalho uncommitted
+  ficava lá à espera.
+- Evitar builds Maven longos via `run_in_background` + polling/Monitor — foi
+  a causa direta de pelo menos 2 stalls nesta sessão. Preferir foreground
+  com timeout generoso (10-15 min para o reactor inteiro).
+- Quando múltiplos streams tocam os mesmos ficheiros-quente
+  (`JtaAnnotationProcessor.java`, `ComponentInvoker.java`,
+  `JtaActionDispatcher`/`JtaPageDispatcher`, `JtaAutoConfiguration.java`,
+  `pom.xml` raiz), a reconciliação manual é esperada — não é sinal de erro,
+  e resolver bem significa combinar a lógica dos dois lados, não escolher um.
+
+---
+
+## Sessão 2026-08-25 (histórico, já processado — ver secção acima)
 
 Contexto: plano-mestre tem 6 fases (0-5). Antes desta sessão já estavam
 commitados em `master`: fases 0, 1, 2, e a maior parte da fase 4
 (composição @Use/@Input, hx-include, deteção de ciclos, argumentos em ações).
 
 Auditoria desta sessão confirmou o que faltava e lançou 4 streams paralelos
-(cada um em worktree isolado) para fechar o resto. Resultado abaixo.
+(cada um em worktree isolado) para fechar o resto:
 
-## Streams concluídos e commitados (dentro dos próprios worktrees, NÃO em master)
+1. **Fase 3 — Correção de dados**: `ConverterRegistry` + `ConversionException`
+   (enum, LocalDate/LocalDateTime, BigDecimal, UUID, List/array, Optional);
+   erro em compile-time para campos bindáveis sem conversor; erros de
+   conversão viram erros de formulário; multi-valor em `List<T>`/array;
+   `LocaleContext`/`LocaleResolver`/`AcceptLanguageLocaleResolver` ligado ao
+   Spring adapter.
+2. **Fase 4 (resto)**: slots (`<slot/>`/`<slot>fallback</slot>`, só default);
+   `ComponentMetadata` com `hasSlot`/`isErrorPage`/`errorPageStatus`/
+   `uploadFields`; `Redirect.withFlashSuccess/withFlashError` +
+   `FlashSupport` protegido por `ReservedFieldNames`; `MultipartParser`
+   próprio isolado em `jta-standalone`; `JtaErrorPageRenderer` +
+   `JtaErrorController` (Spring) + wiring em standalone.
+3. **Fase 5b — Ferramentas**: módulo `jta-test`; dev-loop via
+   `JtaTemplateEngineFactory`/`DirectoryCodeResolver`; `jta-gradle-plugin`;
+   config de publicação Maven Central (`io.github.dumijdev`, Central
+   Publishing Portal).
+4. **Fase 5a — SSE + TCK**: `SseHub` extraído para `jta-runtime`, wired nos
+   4 adapters; módulo `jta-tck` com matriz de compatibilidade gerada,
+   checked into README entre `JTA-TCK-MATRIX-BEGIN/END`.
 
-1. **Fase 3 — Correção de dados** — commit `7c1846b`, branch
-   `worktree-agent-a31e61b897ac32cfe`
-   Worktree: `.claude/worktrees/agent-a31e61b897ac32cfe`
-   - `ConverterRegistry` + `ConversionException` (jta-core): enum, LocalDate/LocalDateTime,
-     BigDecimal, UUID, List/array, Optional.
-   - `JtaAnnotationProcessor`: erro em compile-time para campos bindáveis sem conversor.
-   - `ComponentInvoker`/`JtaActionDispatcher`/`JtaPageDispatcher`: erros de conversão
-     viram erros de formulário (mesmo mapa que bean validation), já não fazem throw.
-   - Multi-valor: campos `List<T>`/array recebem todos os valores; escalares passam
-     a usar `values[values.length-1]` (era `values[0]`).
-   - `LocaleContext` (thread-local) + `LocaleResolver`/`AcceptLanguageLocaleResolver`,
-     ligado ao Spring adapter (`Accept-Language`, default configurável em
-     `jta.config.toml [i18n] default_locale`). Javalin/standalone/Quarkus continuam
-     com `Locale.getDefault()` (sem regressão, mas sem locale por-requisição ainda).
-   - ⚠️ Este branch partiu do commit `b2927f5`, ANTERIOR às fases 2 e 4 em master —
-     `CsrfRequest`/`JtaSession`/checks de argumentos de ação não existiam nesta base.
-     Vai precisar de rebase/merge cuidadoso contra `master` atual.
-
-2. **Fase 4 (resto) — Slots + Flash/upload/error-pages** — commit `74d684c`,
-   branch `worktree-agent-a8ba07b0d0ad918c1`
-   Worktree: `.claude/worktrees/agent-a8ba07b0d0ad918c1`
-   - Slots: `<slot/>` / `<slot>fallback</slot>` em `TemplateTransformer`, projeção de
-     conteúdo via `<tag>corpo</tag>`, aviso de slot não usado. Só slot default (sem
-     nome) suportado — limitação MVP documentada no código.
-   - `ComponentMetadata`: `hasSlot`, `isErrorPage`, `errorPageStatus`, `uploadFields`.
-   - `Redirect.withFlashSuccess/withFlashError`, `FlashSupport`, protegido por
-     `ReservedFieldNames` (nomes reservados não podem vir de query/form).
-   - `MultipartParser` próprio (RFC 7578, zero deps) isolado em `jta-standalone`;
-     upload wired em `ComponentInvoker` + Spring + standalone.
-   - `JtaErrorPageRenderer` + `JtaErrorController` (Spring, com
-     `@AutoConfiguration(before = ErrorMvcAutoConfiguration.class)` +
-     `@ConditionalOnMissingBean` para não colidir com o `BasicErrorController` do Boot)
-     e wiring equivalente no `JtaHttpServer` standalone.
-   - Deliberadamente NÃO wired: Javalin e Quarkus ficaram sem upload/error-page
-     (compila via overload de 6 argumentos preservado, mas sem a feature nova).
-   - Build + testes: verde (`mvn -q compile`/`test` no reactor inteiro).
-
-3. **Fase 5b — Ferramentas (jta-test, dev-loop, plugin Gradle, publicação Maven)**
-   — commit `7f8955f`, branch `worktree-agent-afde64eca17eefb4a`
-   Worktree: `.claude/worktrees/agent-afde64eca17eefb4a`
-   - Novo módulo `jta-test` (`JtaTestHarness`, `JtaAssertions`, `TestCurrentUser`).
-     CSRF/sessão ainda não mockáveis (documentado em `package-info.java`).
-   - Dev-loop: `JtaTemplateEngineFactory` (jta-runtime) alterna
-     `TemplateEngine.createPrecompiled` (default) vs `DirectoryCodeResolver`
-     quando `-Djta.dev=true` ou `[dev] enabled=true` no `jta.config.toml`. Wired
-     nos 4 adapters.
-   - `jta-gradle-plugin`: projeto Gradle próprio (fora do reactor Maven), aplica
-     `gg.jte.gradle` + propaga `-Ajta.resourcesDir`. Verificado com
-     `./gradlew build --offline` (jte-gradle-plugin pinned em 3.2.4, única versão
-     disponível offline — nota: `JtaAnnotationProcessor` neste branch ainda não lê
-     essa flag, ficou documentado como gap).
-   - Config de publicação Maven Central (só config, SEM deploy real): groupId
-     `io.github.dumijdev` (recomendação do plano-mestre) propagado a todos os
-     módulos, `licenses`/`scm`/`developers`/`distributionManagement` via
-     Central Publishing Portal (`central.sonatype.com`, não o OSSRH legado).
-   - ⚠️ Também partiu de `b2927f5` — mesmo aviso de rebase da fase 3.
-
-## Stream NÃO concluído — precisa retomar
-
-4. **Fase 5a — Extração do hub SSE + esqueleto de TCK**
-   Worktree: `.claude/worktrees/agent-ad1ddf70d452c282b`
-   Branch: `worktree-agent-ad1ddf70d452c282b`
-   **NADA commitado ainda** — o worktree tem alterações não commitadas.
-
-   Estado conhecido no momento em que foi interrompido (morto manualmente, sem
-   ser erro):
-   - `SseHub` (jta-runtime) criado, extraído do SSE só-Spring.
-   - Javalin e standalone com wiring de SSE feito (`app.sse(...)` / `HttpExchange`
-     mantido aberto com `text/event-stream`).
-   - `JtaSseRouteHandler` (Quarkus) criado — verificar se está completo/correto.
-   - Módulo `jta-tck/` criado, com harnesses de adapter e testes TCK para Javalin
-     e standalone (`JavalinJtaTckTest`, `StandaloneJtaTckTest`).
-   - A matriz de compatibilidade gerada já batia com o README no último check.
-   - Última ação relatada: prestes a correr o build+testes completos do reactor
-     antes de commitar — isto NÃO chegou a correr/confirmar.
-
-   **Próximo passo:** retomar este worktree (não recriar do zero — há trabalho
-   real por commitar), correr `mvn -q compile` + `mvn -q test` no reactor
-   inteiro, corrigir o que falhar, e commitar com mensagem em PT seguindo o
-   estilo do repo (ver `git log`). Evitar builds Maven longos via
-   `run_in_background` + polling — isso causou 2 stalls anteriores nesta sessão;
-   correr em foreground com timeout razoável.
-
-## Depois de fechar a fase 5a: reconciliação
-
-Nenhum destes 4 branches foi mergeado em `master`. Falta:
-1. Terminar e commitar a fase 5a (acima).
-2. Reconciliar os 4 branches contra o `master` atual — 3 deles (`7c1846b`,
-   `74d684c` no branch da fase 4 é o único que partiu de cima do estado atual;
-   `7c1846b` e `7f8955f` partiram do commit antigo `b2927f5`) vão ter conflitos
-   reais de merge/rebase (mesmos ficheiros tocados por múltiplas fases:
-   `ComponentMetadata`, `JtaAnnotationProcessor`, `pom.xml` raiz, etc.) — seguir
-   o padrão já usado no histórico deste repo (`git log`: commits
-   "Reconcilia fase X com fase Y").
-3. Rodar o build completo (`mvn -q clean install` no reactor) depois de cada
-   reconciliação.
-4. Commitar a reconciliação final em `master` com mensagem em PT, estilo do
-   repo.
-5. Ainda por decidir/confirmar com o utilizador: publicação real no Maven
-   Central (a config está pronta mas não foi testada com deploy real) e
-   se se quer avançar SSE/upload/error-pages para Javalin e Quarkus (ficaram
-   documentados como gap, não implementados).
-
-## Notas gerais desta sessão
-
-- 4 agentes paralelos em worktrees isolados sofreram interrupções (limite de
-  sessão da conta, 2 stalls por watchdog de stream, 1 kill manual do
-  utilizador) — nenhuma delas indicou bug no trabalho em si, só instabilidade
-  de infraestrutura. Foi preciso retomar cada worktree em vez de recomeçar,
-  para não perder trabalho já feito.
-- Cada stream evitava tocar nos mesmos ficheiros onde possível, mas
-  `JtaAnnotationProcessor.java`, `ComponentMetadata.java` e `pom.xml` raiz
-  foram tocados por mais do que um stream — reconciliação manual é esperada,
-  não é sinal de erro.
+Todos os 4 foram concluídos, commitados e reconciliados em `master` — ver
+secção "2026-08-26" acima para o resultado final e os gaps que ficaram.
